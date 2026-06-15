@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# maestro pre-push: peer-review the push before it goes out. Portable — calls
+# `ensemble` from PATH (installed by maestro install.sh), no hardcoded paths.
+# Bypass once with:  ENSEMBLE_REVIEW=0 git push     reviewer: ENSEMBLE_REVIEWER=claude|codex|both
+if [ "${ENSEMBLE_REVIEW:-1}" != 0 ]; then
+  if ! command -v ensemble >/dev/null 2>&1; then
+    echo "[ensemble] 'ensemble' not on PATH — skipping review (run maestro install.sh)" >&2
+  else
+    UP="$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)"
+    SEL="--uncommitted"; [ -n "$UP" ] && SEL="--base $UP"
+    echo "[ensemble] peer-reviewing push ($SEL)..." >&2
+    ensemble review $SEL --by "${ENSEMBLE_REVIEWER:-codex}" 1>&2
+    if [ -t 1 ] && [ -e /dev/tty ]; then
+      printf '\n[ensemble] push anyway? [y/N] ' >&2; read -r a </dev/tty
+      case "$a" in y|Y|yes) :;; *) echo "[ensemble] push aborted." >&2; exit 1;; esac
+    fi
+  fi
+fi
+# Chain to a repo-local classic hook if one exists (so global install never
+# silently disables a repo's own pre-push). Guarded against calling itself.
+CLASSIC="$(git rev-parse --absolute-git-dir 2>/dev/null)/hooks/pre-push"
+SELF_RP="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+CLASSIC_RP="$(readlink -f "$CLASSIC" 2>/dev/null || echo "$CLASSIC")"
+if [ -x "$CLASSIC" ] && [ "$CLASSIC_RP" != "$SELF_RP" ]; then exec "$CLASSIC" "$@"; fi
+exit 0

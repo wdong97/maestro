@@ -1,0 +1,5 @@
+# Runtime artifacts live outside the repo (~/.ensemble/), but ignore strays:
+*.maestro-bak
+*.bak
+*.log
+.DS_Store

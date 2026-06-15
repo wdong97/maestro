@@ -1,0 +1,19 @@
+# .ensemble.toml — per-project gate config for the `conduct` pipeline (Phase 2).
+# Copy to a repo's root as `.ensemble.toml` and adjust. Each command runs from the
+# repo root; a non-zero exit means that gate FAILS and the conductor loops back.
+# Anything omitted is auto-detected where possible (npm/pytest/cargo/go).
+
+[gates]
+lint  = "npm run lint"        # ruff check .   | cargo clippy -- -D warnings
+types = "npm run typecheck"   # mypy .         | tsc --noEmit
+test  = "npm test"            # pytest -q      | cargo test
+build = "npm run build"       # cargo build    | make
+
+[preview]
+# For UI changes (the manual visual sign-off gate): start a preview and where to hit it.
+serve = "npm run dev"
+url   = "http://localhost:3000"
+
+[routing]
+# Hint for auto-routing (Phase 4): default | duel | delegate
+default_pattern = "delegate"
