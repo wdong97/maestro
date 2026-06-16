@@ -53,6 +53,11 @@ chmod +x "$REPO/skills/ensemble/scripts/ensemble.sh"
 link "$REPO/skills/ensemble/scripts/ensemble.sh" "$BIN/ensemble"
 case ":$PATH:" in *":$BIN:"*) ;; *) note "WARN  $BIN is not on PATH — add it to your shell rc";; esac
 
+if [ -d "$REPO/bin" ]; then
+  echo "[bin] -> ~/.local/bin (tui, future tools)"
+  for f in "$REPO"/bin/*; do [ -f "$f" ] || continue; chmod +x "$f"; link "$f" "$BIN/$(basename "$f")"; done
+fi
+
 echo "[guidelines] -> both homes + @import"
 link "$REPO/guidelines/coding-guidelines.md" "$CLAUDE/coding-guidelines.md"
 link "$REPO/guidelines/coding-guidelines.md" "$CODEX/coding-guidelines.md"

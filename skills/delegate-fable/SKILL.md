@@ -35,12 +35,19 @@ behavior, constraints, definition of done). Then launch in the background
 be set explicitly (`fast_default_opt_out = true`). Rationale for each guard is in
 the `delegate` skill.
 
+**Adaptive effort — scale Codex reasoning to the task; don't default to `xhigh`, it's slow:**
+`low` trivial (rename/format/one-liner) · `medium` routine (small CRUD, boilerplate) ·
+`high` standard features / multi-file / normal bugfixes · `xhigh` gnarly (tricky logic,
+concurrency, perf, subtle correctness). Pick the LOWEST effort likely to succeed; bump
+up only if a run fails verification.
+
 ```bash
-SLUG=<short-kebab>; REPO=<repo>; PROMPT='<self-contained spec>'
+SLUG=<short-kebab>; REPO=<repo>; EFF=high   # low|medium|high|xhigh — set per task
+PROMPT='<self-contained spec>'
 DIR=~/.codex/dispatch && mkdir -p "$DIR"
 LOG="$DIR/$SLUG.log"; OUT="$DIR/$SLUG.out"; DONE="$DIR/$SLUG.done"; rm -f "$DONE"; : >"$LOG"
 ( timeout -k 1m 30m codex exec -C "$REPO" --skip-git-repo-check \
-    -m gpt-5.5 -c model_reasoning_effort='"xhigh"' -c service_tier='"fast"' \
+    -m gpt-5.5 -c model_reasoning_effort="\"$EFF\"" -c service_tier='"fast"' \
     --sandbox workspace-write --full-auto \
     -o "$OUT" "$PROMPT" </dev/null >"$LOG" 2>&1 ; echo "$?" >"$DONE" ) &
 CPID=$!; tail -n +1 --pid="$CPID" -f "$LOG"

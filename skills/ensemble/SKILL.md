@@ -115,9 +115,11 @@ launching session, tmux, or a headless dispatch). Output always persists to file
 so "I can't see it" is solved even after tmux/the session is gone.
 
 ```bash
-scripts/ensemble.sh jobs           # list every run (duel/spawn/review/dispatch): status, age, output path
+scripts/ensemble.sh dash           # interactive TUI: select a run, live-preview its output,
+                                   #   a=attach/follow  x=kill  /=filter  q=quit (Python stdlib curses)
+scripts/ensemble.sh jobs           # one-shot list of every run: status, age, output path
 scripts/ensemble.sh tail <name>    # follow a run's output live (or `last` for the most recent)
-scripts/ensemble.sh watch          # auto-refreshing dashboard of all runs
+scripts/ensemble.sh watch          # plain-text auto-refreshing list (no interactivity)
 ```
 
 `jobs` scans `~/.ensemble/{duel,spawn,review}/` and `~/.codex/dispatch/`. Status is

@@ -32,12 +32,18 @@ Rule of thumb: Fable delegates *implementation*; Opus delegates *only typing*.
 Spec it fully, launch in the background (`run_in_background: true`), `fast` set
 explicitly. Full rationale in the `delegate` skill.
 
+**Adaptive effort — scale Codex reasoning to the task:** `low` trivial · `medium`
+routine (boilerplate, small CRUD) · `high` standard multi-file work · `xhigh` gnarly.
+Since this variant delegates only *mechanical* work, that's usually `medium` (bump to
+`high`/`xhigh` only if a run fails). Don't pay `xhigh` for typing.
+
 ```bash
-SLUG=<short-kebab>; REPO=<repo>; PROMPT='<self-contained spec>'
+SLUG=<short-kebab>; REPO=<repo>; EFF=medium   # low|medium|high|xhigh — set per task
+PROMPT='<self-contained spec>'
 DIR=~/.codex/dispatch && mkdir -p "$DIR"
 LOG="$DIR/$SLUG.log"; OUT="$DIR/$SLUG.out"; DONE="$DIR/$SLUG.done"; rm -f "$DONE"; : >"$LOG"
 ( timeout -k 1m 30m codex exec -C "$REPO" --skip-git-repo-check \
-    -m gpt-5.5 -c model_reasoning_effort='"xhigh"' -c service_tier='"fast"' \
+    -m gpt-5.5 -c model_reasoning_effort="\"$EFF\"" -c service_tier='"fast"' \
     --sandbox workspace-write --full-auto \
     -o "$OUT" "$PROMPT" </dev/null >"$LOG" 2>&1 ; echo "$?" >"$DONE" ) &
 CPID=$!; tail -n +1 --pid="$CPID" -f "$LOG"

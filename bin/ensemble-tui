@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""maestro dashboard — interactive TUI over `ensemble jobs`.
+
+Stdlib only (curses), so it runs anywhere python3 exists. Launched by
+`ensemble dash`, which sets ENSEMBLE_BIN to the ensemble CLI path.
+
+Keys:  j/k or arrows = move   a = attach/follow   x = kill   / = filter
+       r = refresh now        enter = follow output   q = quit
+Auto-refreshes every ~1.5s; the bottom pane live-previews the selected run's log.
+"""
+import curses, os, subprocess, time
+
+ENSEMBLE = os.environ.get("ENSEMBLE_BIN", "ensemble")
+REFRESH_MS = 1500
+
+
+def hms(s):
+    s = int(s)
+    if s < 60: return f"{s}s"
+    if s < 3600: return f"{s//60}m"
+    return f"{s//3600}h{(s%3600)//60}m"
+
+
+def get_jobs():
+    try:
+        out = subprocess.run([ENSEMBLE, "jobs", "--porcelain"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    jobs = []
+    for line in out.splitlines():
+        p = line.split("\t")
+        if len(p) >= 5:
+            jobs.append(dict(kind=p[0], name=p[1], status=p[2], age=int(p[3] or 0), log=p[4]))
+    jobs.sort(key=lambda j: j["age"])          # newest (smallest age) first
+    return jobs
+
+
+def tail(path, n):
+    try:
+        with open(path, "r", errors="replace") as f:
+            return f.readlines()[-n:]
+    except Exception:
+        return ["(no output yet)"]
+
+
+def tmux_target(job):
+    if job["kind"] == "duel":  return f"duel-{job['name']}"
+    if job["kind"] == "spawn": return "ensemble"
+    return None
+
+
+def run_fullscreen(cmd):
+    """Drop out of curses, run an interactive command, come back."""
+    curses.endwin()
+    os.system(cmd)
+    try: input("\n[enter to return to dashboard] ")
+    except EOFError: pass
+
+
+def draw(scr, jobs, sel, filt, msg):
+    scr.erase()
+    h, w = scr.getmaxyx()
+    title = "maestro dashboard"
+    sub = f"  {len(jobs)} runs" + (f"  filter:'{filt}'" if filt else "")
+    scr.addnstr(0, 0, (title + sub).ljust(w), w, curses.A_BOLD | curses.A_REVERSE)
+
+    list_h = max(3, (h - 6) // 2)
+    hdr = f"  {'KIND':<8} {'NAME':<26} {'STATUS':<22} {'AGE':<5}"
+    scr.addnstr(1, 0, hdr.ljust(w), w, curses.A_UNDERLINE)
+    top = max(0, sel - (list_h - 1))
+    for i in range(top, min(len(jobs), top + list_h)):
+        j = jobs[i]
+        running = j["status"].startswith("running")
+        row = f"  {j['kind']:<8} {j['name'][:26]:<26} {j['status'][:22]:<22} {hms(j['age']):<5}"
+        attr = curses.A_REVERSE if i == sel else (curses.A_BOLD if running else curses.A_NORMAL)
+        scr.addnstr(2 + (i - top), 0, row.ljust(w), w, attr)
+
+    py = 2 + list_h
+    scr.addnstr(py, 0, (" output ──" + ("─" * w))[:w], w, curses.A_DIM)
+    if jobs:
+        for k, ln in enumerate(tail(jobs[sel]["log"], h - py - 3)):
+            scr.addnstr(py + 1 + k, 0, "  " + ln.rstrip("\n"), w - 1)
+
+    foot = " j/k move · a attach/follow · x kill · / filter · r refresh · q quit "
+    if msg: foot = f" {msg} "
+    scr.addnstr(h - 1, 0, foot.ljust(w), w, curses.A_REVERSE)
+    scr.refresh()
+
+
+def prompt(scr, label):
+    h, w = scr.getmaxyx()
+    curses.echo(); curses.curs_set(1)
+    scr.addnstr(h - 1, 0, (label + " ").ljust(w), w, curses.A_REVERSE)
+    scr.refresh()
+    try: s = scr.getstr(h - 1, len(label) + 1, 40).decode().strip()
+    except Exception: s = ""
+    curses.noecho(); curses.curs_set(0)
+    return s
+
+
+def main(scr):
+    curses.curs_set(0); scr.timeout(REFRESH_MS)
+    sel, filt, msg = 0, "", ""
+    jobs = get_jobs()
+    last = time.time()
+    while True:
+        shown = [j for j in jobs if filt.lower() in j["name"].lower()] if filt else jobs
+        sel = max(0, min(sel, len(shown) - 1)) if shown else 0
+        draw(scr, shown, sel, filt, msg)
+        msg = ""
+        c = scr.getch()
+        if c == -1:
+            if time.time() - last > REFRESH_MS / 1000:
+                jobs = get_jobs(); last = time.time()
+            continue
+        if c in (ord("q"),): break
+        elif c in (curses.KEY_DOWN, ord("j")): sel += 1
+        elif c in (curses.KEY_UP, ord("k")): sel -= 1
+        elif c in (ord("r"),): jobs = get_jobs(); last = time.time()
+        elif c == ord("/"): filt = prompt(scr, "filter:")
+        elif c in (ord("a"), ord("\n"), curses.KEY_ENTER, 10, 13):
+            if shown:
+                j = shown[sel]; tgt = tmux_target(j)
+                if tgt and subprocess.run(["tmux", "has-session", "-t", tgt],
+                                          capture_output=True).returncode == 0:
+                    run_fullscreen(f"tmux attach -t {tgt}")
+                else:
+                    run_fullscreen(f"{ENSEMBLE} tail {j['name']}")
+                scr.timeout(REFRESH_MS); jobs = get_jobs()
+        elif c == ord("x"):
+            if shown:
+                j = shown[sel]; tgt = tmux_target(j)
+                if tgt and subprocess.run(["tmux", "kill-session", "-t", tgt],
+                                          capture_output=True).returncode == 0:
+                    msg = f"killed {tgt}"
+                else:
+                    msg = "no tmux session to kill for this run"
+                jobs = get_jobs()
+
+
+if __name__ == "__main__":
+    try: curses.wrapper(main)
+    except KeyboardInterrupt: pass

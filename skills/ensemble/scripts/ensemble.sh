@@ -86,7 +86,7 @@ cmd_duel() {
   local mode=ro name="" mc="" mx="$CODEX_MODEL_DEFAULT" eff="$CODEX_EFFORT_DEFAULT" wait=0 prompt=""
   while [ $# -gt 0 ]; do case "$1" in
     --rw) mode=rw;; --name) name="$2"; shift;; --mc) mc="$2"; shift;;
-    --mx) mx="$2"; shift;; --wait) wait=1;; --) shift; prompt="$*"; break;;
+    --mx) mx="$2"; shift;; --eff) eff="$2"; shift;; --wait) wait=1;; --) shift; prompt="$*"; break;;
     -*) die "unknown duel flag $1";; *) prompt="$*"; break;;
   esac; shift; done
   [ -n "$prompt" ] || die "duel needs a PROMPT"
@@ -134,7 +134,7 @@ cmd_spawn() {
   local mode=ro name="" dir_in="" prompt="" mc="" mx="$CODEX_MODEL_DEFAULT" eff="$CODEX_EFFORT_DEFAULT"
   while [ $# -gt 0 ]; do case "$1" in
     --rw) mode=rw;; --name) name="$2"; shift;; --dir) dir_in="$2"; shift;;
-    --mc) mc="$2"; shift;; --mx) mx="$2"; shift;; --) shift; prompt="$*"; break;;
+    --mc) mc="$2"; shift;; --mx) mx="$2"; shift;; --eff) eff="$2"; shift;; --) shift; prompt="$*"; break;;
     -*) die "unknown spawn flag $1";; *) prompt="$*"; break;;
   esac; shift; done
   [ -n "$prompt" ] || die "spawn needs a PROMPT"
@@ -376,6 +376,7 @@ _emit_jobs() {
 }
 
 cmd_jobs() {
+  if [ "${1:-}" = --porcelain ]; then _emit_jobs; return; fi   # raw TAB records for the TUI
   local rows; rows="$(_emit_jobs)"
   if [ -z "$rows" ]; then echo "no runs yet (nothing under ~/.ensemble or ~/.codex/dispatch)"; return; fi
   printf '%-9s %-26s %-24s %-6s %s\n' KIND NAME STATUS AGE OUTPUT
@@ -413,6 +414,16 @@ cmd_watch() {
   done
 }
 
+# Interactive curses dashboard (Python stdlib; falls back to `watch` if unavailable).
+cmd_dash() {
+  local self repo tui
+  self="$(readlink -f "${BASH_SOURCE[0]}")"
+  repo="$(cd "$(dirname "$self")/../../.." && pwd)"
+  tui="$repo/bin/ensemble-tui"
+  if have python3 && [ -f "$tui" ]; then ENSEMBLE_BIN="$self" exec python3 "$tui"
+  else echo "[ensemble] dashboard needs python3 + $tui — falling back to text watch"; cmd_watch "$@"; fi
+}
+
 sub="${1:-}"; shift || true
 case "$sub" in
   duel)                cmd_duel "$@";;
@@ -422,22 +433,24 @@ case "$sub" in
   jobs)                cmd_jobs "$@";;
   tail)                cmd_tail "$@";;
   watch)               cmd_watch "$@";;
+  dash|tui|dashboard)  cmd_dash "$@";;
   status)              cmd_status "$@";;
   clean)               cmd_clean "$@";;
   doctor)              cmd_doctor "$@";;
   install-review-hook) cmd_install_hook "$@";;
   *) cat >&2 <<USAGE
 ensemble — Claude + Codex together (tmux-visible)
-  duel [--rw] [--name N] [--mc M] [--mx M] [--wait] "PROMPT"
+  duel [--rw] [--name N] [--mc M] [--mx M] [--eff low|medium|high|xhigh] [--wait] "PROMPT"
        both models answer the same prompt in side-by-side panes; --rw isolates
        each in its own git worktree+branch for parallel editing.
-  spawn <claude|codex> [--rw] [--dir D] "PROMPT"
+  spawn <claude|codex> [--rw] [--dir D] [--mx M] [--eff low|medium|high|xhigh] "PROMPT"
        launch one peer in a viewable tmux window (delegation you can watch).
+       --eff scales Codex reasoning to the task (default xhigh; lower = faster).
   review [--base REF|--uncommitted|--commit SHA] [--by claude|codex|both]
        peer-review a diff (default reviewer: codex).
   jobs                 list every run (duel/spawn/review/dispatch) + status, from anywhere
   tail <NAME|last>     follow a run's output live (works even if launched elsewhere)
-  watch [SECS]         auto-refreshing dashboard of all runs
+  dash                 interactive TUI dashboard (select/attach/kill/filter); watch = plain text
   attach [NAME] | status | clean <NAME|--all> | doctor | install-review-hook [--global]
 USAGE
      exit 1;;

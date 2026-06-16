@@ -51,6 +51,7 @@ Ideas and visuals stay; keystrokes go to Codex.
 
    ```bash
    SLUG=auth-endpoints                       # short kebab name for this dispatch
+   EFF=high                                  # ADAPTIVE: low|medium|high|xhigh — scale to task
    DIR=~/.codex/dispatch && mkdir -p "$DIR"
    LOG="$DIR/$SLUG.log"; OUT="$DIR/$SLUG.out"; DONE="$DIR/$SLUG.done"
    rm -f "$DONE"; : > "$LOG"
@@ -58,7 +59,7 @@ Ideas and visuals stay; keystrokes go to Codex.
    # codex -> file, bounded by a timeout, no stdin; records its own exit in $DONE
    ( timeout -k 1m 30m codex exec -C "$REPO" --skip-git-repo-check \
        -m gpt-5.5 \
-       -c model_reasoning_effort='"xhigh"' \
+       -c model_reasoning_effort="\"$EFF\"" \
        -c service_tier='"fast"' \
        --sandbox workspace-write --full-auto \
        -o "$OUT" "$PROMPT" </dev/null >"$LOG" 2>&1 ; echo "$?" >"$DONE" ) &

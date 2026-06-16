@@ -43,7 +43,9 @@ Undo with `./uninstall.sh` (restores any `.maestro-bak` backups).
 ## Roadmap
 
 - **P0 (done):** package the ensemble + delegate stack as this repo.
-- **P1:** job-state + `ensemble watch` TUI — single pane over all running agents.
+- **P1 (in progress):** observability — `ensemble jobs/tail/watch` + interactive
+  `ensemble dash` TUI (single pane over all runs, attach/kill/filter). Adaptive
+  Codex effort (`--eff`) so delegations aren't all `xhigh`-slow.
 - **P2:** `conduct "<task>"` — plan→route→implement→verify(lint/types/tests/build/
   review/preview)→ship, with deterministic gate enforcement.
 - **P3:** richer TUI (diffs, inline approve). **P4:** routing/parallelism/cost.
