@@ -58,40 +58,49 @@ def run_fullscreen(cmd):
     except EOFError: pass
 
 
+def _add(scr, y, x, s, attr=0):
+    """Safe write: clamp to width-1 (never touch the last cell) and swallow ERR."""
+    h, w = scr.getmaxyx()
+    if y < 0 or y >= h or x < 0 or x >= w:
+        return
+    s = s[:max(0, w - x - 1)]
+    try:
+        scr.addstr(y, x, s, attr)
+    except curses.error:
+        pass
+
+
 def draw(scr, jobs, sel, filt, msg):
     scr.erase()
     h, w = scr.getmaxyx()
-    title = "maestro dashboard"
     sub = f"  {len(jobs)} runs" + (f"  filter:'{filt}'" if filt else "")
-    scr.addnstr(0, 0, (title + sub).ljust(w), w, curses.A_BOLD | curses.A_REVERSE)
+    _add(scr, 0, 0, ("maestro dashboard" + sub).ljust(w), curses.A_BOLD | curses.A_REVERSE)
 
     list_h = max(3, (h - 6) // 2)
-    hdr = f"  {'KIND':<8} {'NAME':<26} {'STATUS':<22} {'AGE':<5}"
-    scr.addnstr(1, 0, hdr.ljust(w), w, curses.A_UNDERLINE)
+    _add(scr, 1, 0, f"  {'KIND':<8} {'NAME':<26} {'STATUS':<22} {'AGE':<5}".ljust(w), curses.A_UNDERLINE)
     top = max(0, sel - (list_h - 1))
     for i in range(top, min(len(jobs), top + list_h)):
         j = jobs[i]
         running = j["status"].startswith("running")
         row = f"  {j['kind']:<8} {j['name'][:26]:<26} {j['status'][:22]:<22} {hms(j['age']):<5}"
         attr = curses.A_REVERSE if i == sel else (curses.A_BOLD if running else curses.A_NORMAL)
-        scr.addnstr(2 + (i - top), 0, row.ljust(w), w, attr)
+        _add(scr, 2 + (i - top), 0, row.ljust(w), attr)
 
     py = 2 + list_h
-    scr.addnstr(py, 0, (" output ──" + ("─" * w))[:w], w, curses.A_DIM)
+    _add(scr, py, 0, ("── output " + "─" * w), curses.A_DIM)
     if jobs:
         for k, ln in enumerate(tail(jobs[sel]["log"], h - py - 3)):
-            scr.addnstr(py + 1 + k, 0, "  " + ln.rstrip("\n"), w - 1)
+            _add(scr, py + 1 + k, 0, "  " + ln.rstrip("\n"))
 
-    foot = " j/k move · a attach/follow · x kill · / filter · r refresh · q quit "
-    if msg: foot = f" {msg} "
-    scr.addnstr(h - 1, 0, foot.ljust(w), w, curses.A_REVERSE)
+    foot = msg if msg else "j/k move · a attach/follow · x kill · / filter · r refresh · q quit"
+    _add(scr, h - 1, 0, (" " + foot).ljust(w), curses.A_REVERSE)
     scr.refresh()
 
 
 def prompt(scr, label):
     h, w = scr.getmaxyx()
     curses.echo(); curses.curs_set(1)
-    scr.addnstr(h - 1, 0, (label + " ").ljust(w), w, curses.A_REVERSE)
+    _add(scr, h - 1, 0, (label + " ").ljust(w), curses.A_REVERSE)
     scr.refresh()
     try: s = scr.getstr(h - 1, len(label) + 1, 40).decode().strip()
     except Exception: s = ""
