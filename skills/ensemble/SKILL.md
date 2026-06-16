@@ -108,6 +108,23 @@ Bypass once with `ENSEMBLE_REVIEW=0 git push`; pick the reviewer with
 > hooks. If a repo already has hooks, prefer the per-repo install. Tell the user
 > which one you did.
 
+## Observability — see/follow every run from anywhere
+
+These work from any terminal, independent of whatever launched the run (the
+launching session, tmux, or a headless dispatch). Output always persists to files,
+so "I can't see it" is solved even after tmux/the session is gone.
+
+```bash
+scripts/ensemble.sh jobs           # list every run (duel/spawn/review/dispatch): status, age, output path
+scripts/ensemble.sh tail <name>    # follow a run's output live (or `last` for the most recent)
+scripts/ensemble.sh watch          # auto-refreshing dashboard of all runs
+```
+
+`jobs` scans `~/.ensemble/{duel,spawn,review}/` and `~/.codex/dispatch/`. Status is
+`running` until the run's `.done` file appears (contents = exit code). Use these to
+tell "slow but progressing" from "actually stuck" — Codex defaults to `xhigh`
+reasoning, so a real delegation legitimately runs minutes; `tail` shows it moving.
+
 ## Housekeeping
 
 ```bash

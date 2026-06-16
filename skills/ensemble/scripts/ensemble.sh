@@ -348,12 +348,80 @@ cmd_doctor() {
   [ "$F" -eq 0 ]
 }
 
+# ---- observability: one place to see/tail every run, from any terminal --------
+hms() { local s="${1:-0}"; if [ "$s" -lt 60 ]; then echo "${s}s"; elif [ "$s" -lt 3600 ]; then echo "$((s/60))m"; else echo "$((s/3600))h$(((s%3600)/60))m"; fi; }
+_age() { local m; m=$(stat -c %Y "$1" 2>/dev/null) || { echo 0; return; }; echo $(( $(date +%s) - m )); }
+_donestat() { [ -f "$1" ] && echo "done($(tr -d '\n' <"$1"))" || echo "running"; }
+
+# Emit one TAB-separated record per run: kind  name  status  age_secs  logpath
+_emit_jobs() {
+  local d f name st lg
+  for d in "$BASE_DIR"/duel/*/; do [ -d "$d" ] || continue; d="${d%/}"; name=$(basename "$d")
+    if [ -f "$d/claude.done" ] && [ -f "$d/codex.done" ]; then
+      st="done(c:$(tr -d '\n' <"$d/claude.done"),x:$(tr -d '\n' <"$d/codex.done"))"
+    else st="running"; fi
+    printf 'duel\t%s\t%s\t%s\t%s\n' "$name" "$st" "$(_age "$d")" "$d/codex.log"
+  done
+  for d in "$BASE_DIR"/spawn/*/; do [ -d "$d" ] || continue; d="${d%/}"; name=$(basename "$d")
+    printf 'spawn\t%s\t%s\t%s\t%s\n' "$name" "$(_donestat "$d/run.done")" "$(_age "$d")" "$d/run.log"
+  done
+  for d in "$BASE_DIR"/review/*/; do [ -d "$d" ] || continue; d="${d%/}"; name=$(basename "$d")
+    st="running"; { [ -s "$d/codex.out" ] || [ -s "$d/claude.out" ]; } && st="done"
+    lg="$d/codex.log"; [ -f "$lg" ] || lg="$d/claude.out"
+    printf 'review\t%s\t%s\t%s\t%s\n' "$name" "$st" "$(_age "$d")" "$lg"
+  done
+  for f in "$HOME"/.codex/dispatch/*.log; do [ -f "$f" ] || continue; name=$(basename "$f" .log)
+    printf 'dispatch\t%s\t%s\t%s\t%s\n' "$name" "$(_donestat "${f%.log}.done")" "$(_age "$f")" "$f"
+  done
+}
+
+cmd_jobs() {
+  local rows; rows="$(_emit_jobs)"
+  if [ -z "$rows" ]; then echo "no runs yet (nothing under ~/.ensemble or ~/.codex/dispatch)"; return; fi
+  printf '%-9s %-26s %-24s %-6s %s\n' KIND NAME STATUS AGE OUTPUT
+  echo "$rows" | sort -t"$(printf '\t')" -k4,4n | while IFS="$(printf '\t')" read -r kind name st age log; do
+    printf '%-9s %-26s %-24s %-6s %s\n' "$kind" "${name:0:26}" "$st" "$(hms "$age")" "$log"
+  done
+  echo
+  echo "follow a run:  ensemble tail <name|last>     live dashboard:  ensemble watch"
+}
+
+cmd_tail() {
+  local id="${1:-last}" rows row log st
+  rows="$(_emit_jobs)"; [ -n "$rows" ] || { echo "no runs yet"; return 1; }
+  if [ "$id" = last ]; then row="$(echo "$rows" | sort -t"$(printf '\t')" -k4,4n | head -1)"
+  else
+    row="$(echo "$rows" | awk -F"$(printf '\t')" -v n="$id" '$2==n{print;exit}')"
+    [ -n "$row" ] || row="$(echo "$rows" | awk -F"$(printf '\t')" -v n="$id" 'index($2,n){print;exit}')"
+  fi
+  [ -n "$row" ] || { echo "no run matching '$id' — see: ensemble jobs"; return 1; }
+  st="$(echo "$row" | cut -f3)"; log="$(echo "$row" | cut -f5)"
+  [ -f "$log" ] || { echo "log not found: $log"; return 1; }
+  case "$st" in
+    running*) echo "[ensemble] tailing live: $log  (Ctrl-C to stop)"; tail -n 200 -f "$log";;
+    *)        echo "[ensemble] $st — showing $log"; tail -n 400 "$log";;
+  esac
+}
+
+cmd_watch() {
+  local interval="${1:-2}"
+  while true; do
+    printf '\033[2J\033[H'
+    printf 'ensemble watch — every %ss, Ctrl-C to exit   %s\n\n' "$interval" "$(date '+%Y-%m-%d %H:%M:%S')"
+    cmd_jobs
+    sleep "$interval" || break
+  done
+}
+
 sub="${1:-}"; shift || true
 case "$sub" in
   duel)                cmd_duel "$@";;
   spawn)               cmd_spawn "$@";;
   review)              cmd_review "$@";;
   attach)              cmd_attach "$@";;
+  jobs)                cmd_jobs "$@";;
+  tail)                cmd_tail "$@";;
+  watch)               cmd_watch "$@";;
   status)              cmd_status "$@";;
   clean)               cmd_clean "$@";;
   doctor)              cmd_doctor "$@";;
@@ -367,6 +435,9 @@ ensemble — Claude + Codex together (tmux-visible)
        launch one peer in a viewable tmux window (delegation you can watch).
   review [--base REF|--uncommitted|--commit SHA] [--by claude|codex|both]
        peer-review a diff (default reviewer: codex).
+  jobs                 list every run (duel/spawn/review/dispatch) + status, from anywhere
+  tail <NAME|last>     follow a run's output live (works even if launched elsewhere)
+  watch [SECS]         auto-refreshing dashboard of all runs
   attach [NAME] | status | clean <NAME|--all> | doctor | install-review-hook [--global]
 USAGE
      exit 1;;
