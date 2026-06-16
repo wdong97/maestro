@@ -420,6 +420,15 @@ cmd_dash() {
   self="$(readlink -f "${BASH_SOURCE[0]}")"
   repo="$(cd "$(dirname "$self")/../../.." && pwd)"
   tui="$repo/bin/ensemble-tui"
+  if ! { [ -t 0 ] && [ -t 1 ]; }; then
+    echo "[ensemble] 'dash' is an interactive TUI and needs a real terminal — it can't run"
+    echo "           inside the agent's command box or a pipe. Run it from a normal shell:"
+    echo "               ensemble dash"
+    echo "           or detached in tmux (attach from anywhere):"
+    echo "               tmux new -s dash 'ensemble dash'   # then: tmux attach -t dash"
+    echo "[ensemble] one-shot snapshot instead:"; echo
+    cmd_jobs; return 0
+  fi
   if have python3 && [ -f "$tui" ]; then ENSEMBLE_BIN="$self" exec python3 "$tui"
   else echo "[ensemble] dashboard needs python3 + $tui — falling back to text watch"; cmd_watch "$@"; fi
 }

@@ -149,5 +149,12 @@ def main(scr):
 
 
 if __name__ == "__main__":
-    try: curses.wrapper(main)
-    except KeyboardInterrupt: pass
+    import sys
+    try:
+        curses.wrapper(main)
+    except KeyboardInterrupt:
+        pass
+    except curses.error as e:
+        print(f"[ensemble-tui] can't start interactive UI ({e}). "
+              f"Run `ensemble dash` in a real terminal.", file=sys.stderr)
+        sys.exit(1)
