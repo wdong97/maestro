@@ -5,8 +5,8 @@ share skills and project context, answer hard questions head-to-head, hand work 
 each other, review every push, and report to live dashboards you can watch.
 
 It's a plain git repo. `install.sh` symlinks it into `~/.claude`, `~/.codex`,
-`~/.local/bin`, and your git hooks — so the repo is the single source of truth,
-edits are live, and `git pull` updates everything on every machine.
+`~/.local/bin`, and your git hooks. The repo stays the single source of truth:
+edits go live immediately, and `git pull` updates every machine.
 
 New here? **[docs/SETUP.md](docs/SETUP.md)** is the step-by-step guide for a fresh
 machine (humans and agents). The short version is below.
@@ -30,7 +30,7 @@ ensemble duel "What's the simplest fix for <some real problem in this repo>?"
 # watch live:  tmux attach -t duel-<name>
 ```
 
-That's it — you're running the paradigm. The rest is just more of the same.
+You're set up. The rest of this page is the tour.
 
 ## What you get
 
