@@ -6,7 +6,16 @@
 #                        (forwarded to this project's orchestration/status.py)
 set -euo pipefail
 
-SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+# Resolve symlinks portably (BSD/macOS readlink has no -f).
+_realpath() {
+  local p="$1" d
+  while [ -h "$p" ]; do
+    d="$(cd -P "$(dirname "$p")" >/dev/null 2>&1 && pwd)"
+    p="$(readlink "$p")"; case "$p" in /*) ;; *) p="$d/$p";; esac
+  done
+  d="$(cd -P "$(dirname "$p")" >/dev/null 2>&1 && pwd)"; printf '%s/%s\n' "$d" "$(basename "$p")"
+}
+SELF="$(_realpath "${BASH_SOURCE[0]}")"
 REPO="$(cd "$(dirname "$SELF")/.." && pwd)"     # bin/.. = maestro repo root
 TPL="$REPO/board"
 

@@ -45,6 +45,8 @@ def _recompute_slice(sl):
     gated = len(checks) > 0
     all_done = bool(ts) and all(s == "done" for s in ts)
     gate_green = all(c.get("status") == "pass" for c in checks)  # vacuously True if no checks
+    if sl.get("sign_off") and not all_done:        # reopened/added work invalidates a prior sign-off
+        sl.pop("sign_off", None)                   # forces a fresh sign-off before the slice can finish again
     signed = bool(sl.get("sign_off"))
     if all_done and gate_green and (not gated or signed):
         sl["status"] = "done"

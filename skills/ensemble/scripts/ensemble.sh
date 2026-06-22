@@ -29,6 +29,14 @@ CODEX_EFFORT_DEFAULT="xhigh"
 
 die() { echo "[ensemble] error: $*" >&2; exit 2; }
 have() { command -v "$1" >/dev/null 2>&1; }
+_realpath() {  # resolve symlinks portably (BSD/macOS readlink has no -f)
+  local p="$1" d
+  while [ -h "$p" ]; do
+    d="$(cd -P "$(dirname "$p")" >/dev/null 2>&1 && pwd)"
+    p="$(readlink "$p")"; case "$p" in /*) ;; *) p="$d/$p";; esac
+  done
+  d="$(cd -P "$(dirname "$p")" >/dev/null 2>&1 && pwd)"; printf '%s/%s\n' "$d" "$(basename "$p")"
+}
 slug() { echo "$1" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-' | cut -c1-32; }
 
 have tmux || die "tmux not found"
@@ -304,8 +312,8 @@ cmd_doctor() {
   echo "[CLIs]"
   if have ensemble; then
     local ep; ep="$(command -v ensemble)"
-    local rp; rp="$(readlink -f "$ep" 2>/dev/null || echo "$ep")"
-    [ "$rp" = "$(readlink -f "${BASH_SOURCE[0]}")" ] && ok "ensemble on PATH -> $rp" \
+    local rp; rp="$(_realpath "$ep" 2>/dev/null || echo "$ep")"
+    [ "$rp" = "$(_realpath "${BASH_SOURCE[0]}")" ] && ok "ensemble on PATH -> $rp" \
       || warn "ensemble on PATH ($ep) resolves to $rp, not this script"
   else warn "ensemble not on PATH (use full script path, or symlink into ~/.local/bin)"; fi
   if have claude; then ok "claude: $(claude --version 2>/dev/null | head -1)"; else bad "claude not found on PATH"; fi
@@ -417,7 +425,7 @@ cmd_watch() {
 # Interactive curses dashboard (Python stdlib; falls back to `watch` if unavailable).
 cmd_dash() {
   local self repo tui
-  self="$(readlink -f "${BASH_SOURCE[0]}")"
+  self="$(_realpath "${BASH_SOURCE[0]}")"
   repo="$(cd "$(dirname "$self")/../../.." && pwd)"
   tui="$repo/bin/ensemble-tui"
   if ! { [ -t 0 ] && [ -t 1 ]; }; then

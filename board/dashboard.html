@@ -90,13 +90,13 @@ var state=null, view=(function(){try{return localStorage.getItem("maestro-board-
 function col(i){return PALETTE[i%PALETTE.length];}
 function ago(iso){ if(!iso) return ""; var t=new Date(iso).getTime(); if(isNaN(t)) return ""; var s=Math.max(0,Math.floor((Date.now()-t)/1000));
   if(s<60) return s+"s ago"; var m=Math.floor(s/60); if(m<60) return m+"m ago"; var h=Math.floor(m/60); if(h<24) return h+"h ago"; return Math.floor(h/24)+"d ago"; }
-function esc(x){ return (x==null?"":(""+x)).replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}); }
+function esc(x){ return (x==null?"":(""+x)).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
 
 function renderBoard(d){
   var fb=document.getElementById("filterbar"); fb.style.display="flex";
   var chips='<button class="fchip'+(filter==="all"?" on":"")+'" data-f="all">All</button>';
   d.slices.forEach(function(sl,i){ var c=col(i);
-    chips+='<button class="fchip'+(filter===sl.id?" on":"")+'" data-f="'+sl.id+'" style="--ac:'+c+'">'+esc(sl.id)+'</button>'; });
+    chips+='<button class="fchip'+(filter===sl.id?" on":"")+'" data-f="'+esc(sl.id)+'" style="--ac:'+c+'">'+esc(sl.id)+'</button>'; });
   fb.innerHTML=chips;
   var items=[];
   d.slices.forEach(function(sl,i){ sl.tasks.forEach(function(t){ if(filter==="all"||filter===sl.id) items.push({t:t,sid:sl.id,c:col(i)}); }); });
