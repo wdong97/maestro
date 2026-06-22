@@ -45,8 +45,6 @@ def _recompute_slice(sl):
     gated = len(checks) > 0
     all_done = bool(ts) and all(s == "done" for s in ts)
     gate_green = all(c.get("status") == "pass" for c in checks)  # vacuously True if no checks
-    if sl.get("sign_off") and not all_done:        # reopened/added work invalidates a prior sign-off
-        sl.pop("sign_off", None)                   # forces a fresh sign-off before the slice can finish again
     signed = bool(sl.get("sign_off"))
     if all_done and gate_green and (not gated or signed):
         sl["status"] = "done"
@@ -106,12 +104,15 @@ def set_task(tid, status, owner=None, note=None, force=False):
         if (status == "in-progress" and not force and owner
                 and t["status"] == "in-progress" and t.get("owner") and t["owner"] != owner):
             sys.exit(f"refusing: {tid} is in-progress by @{t['owner']} (use --force to take it over)")
+        was_done = t["status"] == "done"
         t["status"] = status
         t["updated_at"] = _now()
         if owner is not None:
             t["owner"] = owner
         if note is not None:
             t["note"] = note
+        if was_done and status != "done":          # reopening completed work invalidates the sign-off
+            sl.pop("sign_off", None)
         _recompute_slice(sl)
         return f"{tid} -> {status}" + (f"  @{t['owner']}" if t.get("owner") else "")
     print(_with_state(fn))
@@ -184,6 +185,7 @@ def add_task(sid, title, tid=None, owner=None):
             tid = f"{base}-{n}"; n += 1
         sl["tasks"].append({"id": tid, "title": title, "status": "todo",
                             "owner": owner, "updated_at": _now(), "note": ""})
+        sl.pop("sign_off", None)                    # new work invalidates a prior sign-off
         _recompute_slice(sl)
         return f"added {tid} to {sid}: {title}"
     print(_with_state(fn))
