@@ -1,0 +1,31 @@
+{
+  "project": "My Project",
+  "updated_at": null,
+  "note": "Live build board — the single source of truth for what's being worked. Update it via ./status.py (or `board ...`), never by hand while agents are running. View with ./serve.sh.",
+  "slices": [
+    {
+      "id": "ITER",
+      "title": "Ad-hoc / this iteration",
+      "status": "todo",
+      "tasks": [],
+      "gate": { "quality": [], "performance": [] },
+      "ledger": {}
+    },
+    {
+      "id": "S1",
+      "title": "First slice — rename me",
+      "status": "todo",
+      "tasks": [
+        { "id": "S1.example", "title": "Example task — claim it or drop it", "status": "todo", "owner": null, "updated_at": null, "note": "" }
+      ],
+      "gate": {
+        "quality": [
+          { "id": "tests", "check": "tests pass", "status": "pending" },
+          { "id": "review", "check": "peer review clean", "status": "pending" }
+        ],
+        "performance": []
+      },
+      "ledger": {}
+    }
+  ]
+}

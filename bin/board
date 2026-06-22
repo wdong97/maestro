@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# maestro board — scaffold & drive a project's live build board (Kanban + roadmap).
+#   board init [dir]    scaffold orchestration/ into a project (default: cwd)
+#   board serve [port]  serve this project's board (default :8765)
+#   board <cmd> ...      claim|progress|block|review|done|gate|signoff|ledger|add|drop|show
+#                        (forwarded to this project's orchestration/status.py)
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO="$(cd "$(dirname "$SELF")/.." && pwd)"     # bin/.. = maestro repo root
+TPL="$REPO/board"
+
+find_board() {                                  # walk up from cwd to find a board
+  local d="$PWD"
+  while [ "$d" != / ]; do
+    [ -f "$d/orchestration/status.py" ] && { echo "$d/orchestration"; return 0; }
+    d="$(dirname "$d")"
+  done
+  return 1
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  init)
+    shift
+    dest="${1:-$PWD}/orchestration"
+    mkdir -p "$dest"
+    cp "$TPL/status.py" "$TPL/dashboard.html" "$TPL/serve.sh" "$TPL/README.md" "$dest/"
+    chmod +x "$dest/status.py" "$dest/serve.sh"
+    if [ -f "$dest/board-state.json" ]; then
+      echo "[board] kept existing $dest/board-state.json"
+    else
+      cp "$TPL/board-state.template.json" "$dest/board-state.json"
+      echo "[board] created $dest/board-state.json — edit the project name + slices"
+    fi
+    gi="$(dirname "$dest")/.gitignore"
+    grep -qxF 'orchestration/*.lock' "$gi" 2>/dev/null || echo 'orchestration/*.lock' >> "$gi" 2>/dev/null || true
+    echo "[board] ready:  board serve   |   board claim <task> --owner you   |   board show"
+    ;;
+  serve)
+    shift
+    b="$(find_board)" || { echo "[board] no orchestration/ found — run: board init"; exit 1; }
+    exec "$b/serve.sh" "$@"
+    ;;
+  ""|-h|--help|help)
+    cat >&2 <<'USAGE'
+board — maestro live build board (Kanban + roadmap; agents + humans share it)
+  board init [dir]    scaffold orchestration/ (board-state.json + dashboard + serve + status.py)
+  board serve [port]  serve this project's board (default :8765)
+  board <cmd> ...      claim | progress | block | review | done | gate | signoff |
+                       ledger | add | drop | show   (run from the project; see board README)
+USAGE
+    exit 1
+    ;;
+  *)
+    b="$(find_board)" || { echo "[board] no orchestration/ found here — run: board init"; exit 1; }
+    exec python3 "$b/status.py" "$@"
+    ;;
+esac
