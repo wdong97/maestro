@@ -528,38 +528,43 @@ MD
 # Matches real agent processes (executable codex/claude, or a codex exec|resume /
 # claude -p invocation) — not every helper that merely references a .claude path.
 cmd_ps() {
+  # system RAM "in use" % (total - available), the task-manager-style gauge.
+  local mempct; mempct=$(free 2>/dev/null | awk '/Mem:/{if($2>0)printf "%d",($2-$7)/$2*100}')
   if [ "${1:-}" = --sum ]; then
-    ps -eo pcpu=,rss=,comm=,args= 2>/dev/null | awk '
+    local s; s=$(ps -eo pcpu=,rss=,comm=,args= 2>/dev/null | awk '
       { c=$3; l=tolower($0) }
       (c=="codex"||c=="claude" || l ~ /codex exec|codex resume|claude -p/) \
         && l !~ /ensemble\.sh|ensemble-tui|status\.py|maestro\/bin|awk| -eo / { n++; cpu+=$1; rss+=$2 }
-      END { printf "agents=%d cpu=%.1f%% rss=%dM\n", n+0, cpu+0, (rss+0)/1024 }'
+      END { printf "%d %.1f %d", n+0, cpu+0, (rss+0)/1024 }')
+    printf "agents=%s cpu=%s%% rss=%sM mem=%s%%\n" ${s:-0 0 0} "${mempct:-?}"
     return
   fi
-  # task-manager view: agents sorted by CPU (or RAM with --by rss), with the
-  # project each is in (its working dir) so you can see which convo/thread is heavy.
+  # task-manager view: agents sorted by CPU (or RAM with --by rss), with each
+  # agent's share of total RAM (%MEM) and the project (cwd) it's working in.
   local by=cpu; [ "${1:-}" = --by ] && by="${2:-cpu}"
   echo "== system =="
-  uptime 2>/dev/null | sed 's/^/  /'
-  free -h 2>/dev/null | awk '/Mem:|Swap:/{print "  "$0}'
-  echo "== agents — sorted by ${by} (top consumers first; PROJECT = working dir) =="
-  printf "  %5s %7s %-8s %-13s %s\n" "CPU%" "RAM" "PID" "AGENT" "PROJECT"
+  free -b 2>/dev/null | awk '
+    /Mem:/  { printf "  RAM:  %3d%% in use   (%.1fG of %.1fG)   %.1fG available\n", ($2?($2-$7)/$2*100:0), ($2-$7)/1073741824, $2/1073741824, $7/1073741824 }
+    /Swap:/ { if($2>0) printf "  swap: %3d%% in use   (%.1fG of %.1fG)\n", $3/$2*100, $3/1073741824, $2/1073741824 }'
+  uptime 2>/dev/null | grep -oE 'load average.*' | sed 's/^/  /'
+  echo "== agents — sorted by ${by} (top first; %MEM = share of total RAM; PROJECT = cwd) =="
+  printf "  %5s %7s %5s %-8s %-13s %s\n" "CPU%" "RAM" "%MEM" "PID" "AGENT" "PROJECT"
   local rows
-  rows=$(ps -eo pid=,pcpu=,rss=,comm=,args= 2>/dev/null | awk '
-    { c=$4; l=tolower($0) }
+  rows=$(ps -eo pid=,pcpu=,pmem=,rss=,comm=,args= 2>/dev/null | awk '
+    { c=$5; l=tolower($0) }
     (c=="codex"||c=="claude" || l ~ /codex exec|codex resume|claude -p/) \
       && l !~ /ensemble\.sh|ensemble-tui|status\.py|maestro\/bin|awk| -eo / {
       kind=(l~/codex/)?"codex":"claude";
       mode=(l~/exec/)?"exec":((l~/ -p/)?"-p":((l~/resume/)?"resume":"session"));
-      dir=""; for(i=5;i<=NF;i++){ if($i=="-C"||$i=="--add-dir"||$i=="--cd"){dir=$(i+1);break} }
-      printf "%s\t%s\t%s\t%s-%s\t%s\n",$1,$2,$3,kind,mode,dir }')
+      dir=""; for(i=6;i<=NF;i++){ if($i=="-C"||$i=="--add-dir"||$i=="--cd"){dir=$(i+1);break} }
+      printf "%s\t%s\t%s\t%s\t%s-%s\t%s\n",$1,$2,$3,$4,kind,mode,dir }')
   [ -z "$rows" ] && { echo "  (no live codex/claude agent processes)"; return; }
-  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r pid cpu rss km dir; do
+  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r pid cpu pmem rss km dir; do
     cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null); [ -n "$cwd" ] && dir="$cwd"   # cwd is the best convo id
-    printf "%s\t%s\t%s\t%s\t%s\n" "$cpu" "$((rss/1024))" "$pid" "$km" "$(basename "${dir:-?}")"
+    printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$cpu" "$((rss/1024))" "$pmem" "$pid" "$km" "$(basename "${dir:-?}")"
   done | sort -t"$(printf '\t')" -k"$([ "$by" = rss ] && echo 2 || echo 1)" -rn | \
-  while IFS="$(printf '\t')" read -r cpu rssmb pid km proj; do
-    printf "  %4s%% %6sM %-8s %-13s %s\n" "$cpu" "$rssmb" "$pid" "$km" "$proj"
+  while IFS="$(printf '\t')" read -r cpu rssmb pmem pid km proj; do
+    printf "  %4s%% %6sM %4s%% %-8s %-13s %s\n" "$cpu" "$rssmb" "$pmem" "$pid" "$km" "$proj"
   done
 }
 

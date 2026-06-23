@@ -62,7 +62,7 @@ review) is listed with status, from any terminal:
 ensemble jobs                 # one-shot list of all runs
 ensemble tail <name|last>     # follow one run's output live
 ensemble dash                 # interactive TUI (real terminal); press `p` for the live process/RAM pane
-ensemble ps [--by rss]        # task-manager: agents sorted by CPU (or RAM), with the project each is in
+ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted by CPU/RAM w/ %MEM + project
 ```
 
 **Measure it — `report`.** A performance snapshot from real logged usage (reviews
