@@ -205,7 +205,9 @@ cmd_delegate() {
     agent="$(codex_cmd "$mode" "$id" "$eff" "$wd" "$out")"
     pipeline="cat $(printf %q "$pf") | $agent"
   fi
-  printf '#!/usr/bin/env bash\nset -uo pipefail\n%s\nexit ${PIPESTATUS[1]}\n' "$pipeline" > "$runner"
+  # cd into the work dir so the implementer treats it as the project (Claude has no
+  # -C; without this it would run in the caller's cwd). Harmless for Codex (uses -C too).
+  printf '#!/usr/bin/env bash\nset -uo pipefail\ncd %q || exit 1\n%s\nexit ${PIPESTATUS[1]}\n' "$wd" "$pipeline" > "$runner"
   echo "[delegate] from=${from:-this session} -> to=$id ($fam)  mode=$mode$([ "$fam" = codex ] && echo "  eff=$eff")"
   echo "[delegate] run '$name'  |  follow: ensemble tail $name  |  clean result: $out"
   ( timeout -k 1m "${ENSEMBLE_DELEGATE_TIMEOUT:-30m}" bash "$runner" </dev/null >"$log" 2>&1; echo $? >"$done" ) &
