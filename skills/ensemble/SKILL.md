@@ -121,6 +121,8 @@ scripts/ensemble.sh dash           # interactive TUI: select a run, live-preview
 scripts/ensemble.sh jobs           # one-shot list of every run: status, age, output path
 scripts/ensemble.sh tail <name>    # follow a run's output live (or `last` for the most recent)
 scripts/ensemble.sh watch          # plain-text auto-refreshing list (no interactivity)
+scripts/ensemble.sh ps             # live process/RAM of running codex/claude agents (+ system)
+scripts/ensemble.sh report [--md]  # performance snapshot: reviews, findings, success rate, tokens
 ```
 
 `jobs` scans `~/.ensemble/{duel,spawn,review}/` and `~/.codex/dispatch/`. Status is

@@ -62,6 +62,16 @@ review) is listed with status, from any terminal:
 ensemble jobs                 # one-shot list of all runs
 ensemble tail <name|last>     # follow one run's output live
 ensemble dash                 # interactive TUI (run in a real terminal)
+ensemble ps                   # live process/RAM of running agents (+ system); dash shows a summary in its header
+```
+
+**Measure it — `report`.** A performance snapshot from real logged usage (reviews
+run, findings raised by severity, delegation success rate, tokens). See
+[PERFORMANCE.md](PERFORMANCE.md) for a committed snapshot; regenerate with:
+
+```bash
+ensemble report               # terminal summary
+ensemble report --md > PERFORMANCE.md
 ```
 
 **Track the work — `board`.** A shared, server-less Kanban + roadmap board that

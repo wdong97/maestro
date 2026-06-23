@@ -12,6 +12,15 @@ import curses, os, subprocess, time
 
 ENSEMBLE = os.environ.get("ENSEMBLE_BIN", "ensemble")
 REFRESH_MS = 1500
+RES = ""   # latest `ensemble ps --sum` line, shown in the header
+
+
+def get_res():
+    try:
+        return subprocess.run([ENSEMBLE, "ps", "--sum"], capture_output=True,
+                              text=True, timeout=5).stdout.strip()
+    except Exception:
+        return ""
 
 
 def hms(s):
@@ -73,7 +82,7 @@ def _add(scr, y, x, s, attr=0):
 def draw(scr, jobs, sel, filt, msg):
     scr.erase()
     h, w = scr.getmaxyx()
-    sub = f"  {len(jobs)} runs" + (f"  filter:'{filt}'" if filt else "")
+    sub = f"  {len(jobs)} runs" + (f"  ·  {RES}" if RES else "") + (f"  filter:'{filt}'" if filt else "")
     _add(scr, 0, 0, ("maestro dashboard" + sub).ljust(w), curses.A_BOLD | curses.A_REVERSE)
 
     list_h = max(3, (h - 6) // 2)
@@ -109,9 +118,10 @@ def prompt(scr, label):
 
 
 def main(scr):
+    global RES
     curses.curs_set(0); scr.timeout(REFRESH_MS)
     sel, filt, msg = 0, "", ""
-    jobs = get_jobs()
+    jobs = get_jobs(); RES = get_res()
     last = time.time()
     while True:
         shown = [j for j in jobs if filt.lower() in j["name"].lower()] if filt else jobs
@@ -121,12 +131,12 @@ def main(scr):
         c = scr.getch()
         if c == -1:
             if time.time() - last > REFRESH_MS / 1000:
-                jobs = get_jobs(); last = time.time()
+                jobs = get_jobs(); RES = get_res(); last = time.time()
             continue
         if c in (ord("q"),): break
         elif c in (curses.KEY_DOWN, ord("j")): sel += 1
         elif c in (curses.KEY_UP, ord("k")): sel -= 1
-        elif c in (ord("r"),): jobs = get_jobs(); last = time.time()
+        elif c in (ord("r"),): jobs = get_jobs(); RES = get_res(); last = time.time()
         elif c == ord("/"): filt = prompt(scr, "filter:")
         elif c in (ord("a"), ord("\n"), curses.KEY_ENTER, 10, 13):
             if shown:
