@@ -61,8 +61,8 @@ review) is listed with status, from any terminal:
 ```bash
 ensemble jobs                 # one-shot list of all runs
 ensemble tail <name|last>     # follow one run's output live
-ensemble dash                 # interactive TUI (run in a real terminal)
-ensemble ps                   # live process/RAM of running agents (+ system); dash shows a summary in its header
+ensemble dash                 # interactive TUI (real terminal); press `p` for the live process/RAM pane
+ensemble ps                   # one-shot process/RAM of running agents (+ system); dash header shows a live summary
 ```
 
 **Measure it — `report`.** A performance snapshot from real logged usage (reviews

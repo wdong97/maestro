@@ -12,7 +12,9 @@ import curses, os, subprocess, time
 
 ENSEMBLE = os.environ.get("ENSEMBLE_BIN", "ensemble")
 REFRESH_MS = 1500
-RES = ""   # latest `ensemble ps --sum` line, shown in the header
+RES = ""        # latest `ensemble ps --sum` line, shown in the header
+PANE = "log"    # bottom pane: "log" (selected run's output) or "res" (resource list)
+PS_LINES = []   # latest `ensemble ps` detail lines (system + per-agent)
 
 
 def get_res():
@@ -21,6 +23,14 @@ def get_res():
                               text=True, timeout=5).stdout.strip()
     except Exception:
         return ""
+
+
+def get_ps():
+    try:
+        out = subprocess.run([ENSEMBLE, "ps"], capture_output=True, text=True, timeout=8).stdout
+        return out.splitlines()
+    except Exception:
+        return ["(ensemble ps failed)"]
 
 
 def hms(s):
@@ -96,12 +106,19 @@ def draw(scr, jobs, sel, filt, msg):
         _add(scr, 2 + (i - top), 0, row.ljust(w), attr)
 
     py = 2 + list_h
-    _add(scr, py, 0, ("── output " + "─" * w), curses.A_DIM)
-    if jobs:
-        for k, ln in enumerate(tail(jobs[sel]["log"], h - py - 3)):
-            _add(scr, py + 1 + k, 0, "  " + ln.rstrip("\n"))
+    avail = h - py - 3
+    if PANE == "res":
+        _add(scr, py, 0, ("── resources (codex/claude agents) " + "─" * w), curses.A_DIM)
+        for k, ln in enumerate(PS_LINES[:avail]):
+            _add(scr, py + 1 + k, 0, ln.rstrip("\n"))
+    else:
+        _add(scr, py, 0, ("── output " + "─" * w), curses.A_DIM)
+        if jobs:
+            for k, ln in enumerate(tail(jobs[sel]["log"], avail)):
+                _add(scr, py + 1 + k, 0, "  " + ln.rstrip("\n"))
 
-    foot = msg if msg else "j/k move · a attach/follow · x kill · / filter · r refresh · q quit"
+    keys = "j/k move · a attach · x kill · p " + ("output" if PANE == "res" else "resources") + " · / filter · r refresh · q quit"
+    foot = msg if msg else keys
     _add(scr, h - 1, 0, (" " + foot).ljust(w), curses.A_REVERSE)
     scr.refresh()
 
@@ -118,7 +135,7 @@ def prompt(scr, label):
 
 
 def main(scr):
-    global RES
+    global RES, PANE, PS_LINES
     curses.curs_set(0); scr.timeout(REFRESH_MS)
     sel, filt, msg = 0, "", ""
     jobs = get_jobs(); RES = get_res()
@@ -131,12 +148,20 @@ def main(scr):
         c = scr.getch()
         if c == -1:
             if time.time() - last > REFRESH_MS / 1000:
-                jobs = get_jobs(); RES = get_res(); last = time.time()
+                jobs = get_jobs(); RES = get_res()
+                if PANE == "res": PS_LINES = get_ps()
+                last = time.time()
             continue
         if c in (ord("q"),): break
         elif c in (curses.KEY_DOWN, ord("j")): sel += 1
         elif c in (curses.KEY_UP, ord("k")): sel -= 1
-        elif c in (ord("r"),): jobs = get_jobs(); RES = get_res(); last = time.time()
+        elif c == ord("p"):
+            PANE = "res" if PANE == "log" else "log"
+            if PANE == "res": PS_LINES = get_ps()
+        elif c in (ord("r"),):
+            jobs = get_jobs(); RES = get_res()
+            if PANE == "res": PS_LINES = get_ps()
+            last = time.time()
         elif c == ord("/"): filt = prompt(scr, "filter:")
         elif c in (ord("a"), ord("\n"), curses.KEY_ENTER, 10, 13):
             if shown:
