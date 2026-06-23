@@ -536,19 +536,31 @@ cmd_ps() {
       END { printf "agents=%d cpu=%.1f%% rss=%dM\n", n+0, cpu+0, (rss+0)/1024 }'
     return
   fi
+  # task-manager view: agents sorted by CPU (or RAM with --by rss), with the
+  # project each is in (its working dir) so you can see which convo/thread is heavy.
+  local by=cpu; [ "${1:-}" = --by ] && by="${2:-cpu}"
   echo "== system =="
   uptime 2>/dev/null | sed 's/^/  /'
   free -h 2>/dev/null | awk '/Mem:|Swap:/{print "  "$0}'
-  echo "== agent processes (codex / claude) =="
-  ps -eo pid,pcpu,pmem,rss,etime,comm,args 2>/dev/null | awk '
-    NR==1 { next }
-    { c=$6; l=tolower($0) }
+  echo "== agents — sorted by ${by} (top consumers first; PROJECT = working dir) =="
+  printf "  %5s %7s %-8s %-13s %s\n" "CPU%" "RAM" "PID" "AGENT" "PROJECT"
+  local rows
+  rows=$(ps -eo pid=,pcpu=,rss=,comm=,args= 2>/dev/null | awk '
+    { c=$4; l=tolower($0) }
     (c=="codex"||c=="claude" || l ~ /codex exec|codex resume|claude -p/) \
       && l !~ /ensemble\.sh|ensemble-tui|status\.py|maestro\/bin|awk| -eo / {
-      kind=(l ~ /codex/)?"codex":"claude";
-      mode=(l ~ /exec/)?"exec":((l ~ / -p/)?"-p":((l ~ /resume/)?"resume":"session"));
-      printf "  pid %-7s  cpu %5s%%  mem %5s%%  rss %6.0fM  up %-10s  %s %s\n",$1,$2,$3,$4/1024,$5,kind,mode; n++ }
-    END { if(!n) print "  (no live codex/claude agent processes)" }'
+      kind=(l~/codex/)?"codex":"claude";
+      mode=(l~/exec/)?"exec":((l~/ -p/)?"-p":((l~/resume/)?"resume":"session"));
+      dir=""; for(i=5;i<=NF;i++){ if($i=="-C"||$i=="--add-dir"||$i=="--cd"){dir=$(i+1);break} }
+      printf "%s\t%s\t%s\t%s-%s\t%s\n",$1,$2,$3,kind,mode,dir }')
+  [ -z "$rows" ] && { echo "  (no live codex/claude agent processes)"; return; }
+  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r pid cpu rss km dir; do
+    cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null); [ -n "$cwd" ] && dir="$cwd"   # cwd is the best convo id
+    printf "%s\t%s\t%s\t%s\t%s\n" "$cpu" "$((rss/1024))" "$pid" "$km" "$(basename "${dir:-?}")"
+  done | sort -t"$(printf '\t')" -k"$([ "$by" = rss ] && echo 2 || echo 1)" -rn | \
+  while IFS="$(printf '\t')" read -r cpu rssmb pid km proj; do
+    printf "  %4s%% %6sM %-8s %-13s %s\n" "$cpu" "$rssmb" "$pid" "$km" "$proj"
+  done
 }
 
 cmd_watch() {
