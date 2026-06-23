@@ -23,20 +23,21 @@ def _num(x):
 
 
 def get_ps_data():
-    sysd, agents = {}, []
+    """System stats + one row per open agent SESSION (process tree), RAM % of total."""
+    sysd, stints = {}, []
     try:
-        out = subprocess.run([ENSEMBLE, "ps", "--porcelain"], capture_output=True,
-                             text=True, timeout=8).stdout
+        out = subprocess.run([ENSEMBLE, "ps", "--stints", "--porcelain"],
+                             capture_output=True, text=True, timeout=8).stdout
     except Exception:
-        return sysd, agents
+        return sysd, stints
     for line in out.splitlines():
         p = line.split("\t")
         if p[0] == "SYS" and len(p) >= 6:
             sysd = dict(rampct=_num(p[1]), used=p[2], total=p[3], swappct=_num(p[4]), load=p[5])
-        elif p[0] == "A" and len(p) >= 7:
-            agents.append(dict(cpu=_num(p[1]), rss=int(p[2] or 0), mem=_num(p[3]),
-                               pid=p[4], kind=p[5], proj=p[6]))
-    return sysd, agents
+        elif p[0] == "T" and len(p) >= 7:
+            stints.append(dict(pct=_num(p[1]), rss=int(p[2] or 0), cpu=_num(p[3]),
+                               nprocs=p[4], kind=p[5], proj=p[6]))
+    return sysd, stints
 
 
 def bar(val, mx, width):
@@ -110,7 +111,7 @@ def draw(scr, jobs, sel, filt, msg):
     h, w = scr.getmaxyx()
     ncpu = sum(a["cpu"] for a in PS_AGENTS)
     rp = PS_SYS.get("rampct", 0)
-    sub = f"  {len(jobs)} runs  ·  {len(PS_AGENTS)} agents  cpu {ncpu:.0f}%  ram {rp:.0f}%" + (f"  filter:'{filt}'" if filt else "")
+    sub = f"  {len(jobs)} runs  ·  {len(PS_AGENTS)} sessions  cpu {ncpu:.0f}%  ram {rp:.0f}%" + (f"  filter:'{filt}'" if filt else "")
     _add(scr, 0, 0, ("maestro dashboard" + sub).ljust(w), curses.A_BOLD | curses.A_REVERSE)
 
     list_h = max(3, (h - 6) // 2)
@@ -126,7 +127,7 @@ def draw(scr, jobs, sel, filt, msg):
     py = 2 + list_h
     avail = h - py - 3
     if PANE == "res":
-        _add(scr, py, 0, ("── agents — sorted by cpu (press p for run output) " + "─" * w), curses.A_DIM)
+        _add(scr, py, 0, ("── open sessions — RAM % of total, tree summed (press p for run output) " + "─" * w), curses.A_DIM)
         r = py + 1
         s = PS_SYS
         if s:
@@ -134,15 +135,15 @@ def draw(scr, jobs, sel, filt, msg):
             sysline = (f"  RAM {rpv:>3.0f}% [{bar(rpv, 100, 14)}] {s['used']}/{s['total']}G"
                        f"   swap {s['swappct']:>3.0f}%   load {s['load']}")
             _add(scr, r, 0, sysline, sev(rpv, 85, 60) | curses.A_BOLD); r += 1
-        _add(scr, r, 0, f"   {'CPU':>5}  {'':12}  {'RAM':>6} {'%MEM':>5} {'PID':<7} {'AGENT':<13} PROJECT",
+        _add(scr, r, 0, f"   {'RAM%':>5}  {'':12}  {'RAM':>6} {'CPU':>5} {'PROCS':>6} {'AGENT':<7} PROJECT",
              curses.A_DIM); r += 1
-        maxcpu = max((a["cpu"] for a in PS_AGENTS), default=1) or 1
+        maxpct = max((a["pct"] for a in PS_AGENTS), default=1) or 1
         for a in PS_AGENTS:
             if r >= h - 1:
                 break
-            att = sev(a["cpu"], maxcpu * 0.6, maxcpu * 0.25)
-            row = (f"  {a['cpu']:>5.1f}% {bar(a['cpu'], maxcpu, 12)} {a['rss']:>5}M "
-                   f"{a['mem']:>4.1f}% {a['pid']:<7} {a['kind']:<13} {a['proj']}")
+            att = sev(a["pct"], maxpct * 0.6, maxpct * 0.25)
+            row = (f"  {a['pct']:>5.1f}% {bar(a['pct'], maxpct, 12)} {a['rss']:>5}M "
+                   f"{a['cpu']:>4.0f}% {a['nprocs']:>5}p {a['kind']:<7} {a['proj']}")
             _add(scr, r, 0, row, att); r += 1
     else:
         _add(scr, py, 0, ("── output " + "─" * w), curses.A_DIM)

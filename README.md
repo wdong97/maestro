@@ -63,6 +63,7 @@ ensemble jobs                 # one-shot list of all runs
 ensemble tail <name|last>     # follow one run's output live
 ensemble dash                 # interactive TUI (real terminal); opens to the live resource task-manager, `p` toggles run output
 ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted by CPU/RAM w/ %MEM + project
+ensemble ps --stints          # per open session (process tree summed): RAM % of total, CPU, #procs, project
 ```
 
 **Measure it — `report`.** A performance snapshot from real logged usage (reviews

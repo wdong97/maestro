@@ -544,9 +544,54 @@ _ps_rows() {
   done | sort -t"$(printf '\t')" -k"$([ "$by" = rss ] && echo 2 || echo 1)" -rn
 }
 
+# Emit one row per open agent SESSION (a root agent process + its whole subtree):
+#   ram%_of_total \t rssMB \t cpu% \t nprocs \t kind \t project
+# RSS is summed across the tree (shared pages may double-count — a rough gauge).
+_ps_stints() {
+  local by="${1:-rss}" memtotal
+  memtotal=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null)
+  [ -n "$memtotal" ] || memtotal=$(free 2>/dev/null | awk '/Mem:/{print $2}')
+  ps -eo pid=,ppid=,pcpu=,rss=,comm=,args= 2>/dev/null | awk '
+    { pid=$1; RSS[pid]=$4; CPU[pid]=$3; CH[$2]=CH[$2]" "pid; PAR[pid]=$2; l=tolower($0);
+      AG[pid]=((($5=="codex"||$5=="claude") || l~/codex exec|codex resume|claude -p/) \
+        && l !~ /ensemble\.sh|ensemble-tui|status\.py|maestro\/bin|awk| -eo /) ? 1 : 0;
+      K[pid]=(l~/codex/)?"codex":((l~/claude/)?"claude":"agent") }
+    function rsum(p,  s,i,a,n){ s=RSS[p]+0; n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") s+=rsum(a[i]); return s }
+    function csum(p,  s,i,a,n){ s=CPU[p]+0; n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") s+=csum(a[i]); return s }
+    function pcnt(p,  s,i,a,n){ s=1;        n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") s+=pcnt(a[i]); return s }
+    END { for(p in AG) if(AG[p] && !AG[PAR[p]])
+            printf "%s\t%d\t%.1f\t%d\t%s\n", p, rsum(p), csum(p), pcnt(p), K[p] }' | \
+  while IFS="$(printf '\t')" read -r pid rsskb cpu n kind; do
+    cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)
+    printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$(awk -v r="$rsskb" -v t="$memtotal" 'BEGIN{printf "%.1f", t?r/t*100:0}')" \
+      "$((rsskb/1024))" "$cpu" "$n" "$kind" "$(basename "${cwd:-?}")"
+  done | sort -t"$(printf '\t')" -k"$([ "$by" = cpu ] && echo 3 || echo 1)" -rn
+}
+
 # Live process/RAM view. `--sum` = one-line summary; `--porcelain` = machine rows
-# (SYS line + per-agent rows) for the dashboard; `--by rss` sorts by RAM.
+# (SYS line + per-agent rows) for the dashboard; `--stints` groups per session;
+# `--by rss` sorts by RAM.
 cmd_ps() {
+  if [ "${1:-}" = --stints ]; then
+    shift; local porc=0 sby=rss
+    while [ $# -gt 0 ]; do case "$1" in --porcelain) porc=1;; --by) sby="${2:-rss}"; shift;; esac; shift; done
+    if [ "$porc" = 1 ]; then
+      free -b 2>/dev/null | awk '/Mem:/{printf "SYS\t%d\t%.1f\t%.1f\t",($2?($2-$7)/$2*100:0),($2-$7)/2^30,$2/2^30}'
+      free 2>/dev/null | awk '/Swap:/{printf "%d\t",($2>0?$3/$2*100:0)}'
+      uptime 2>/dev/null | sed -E 's/.*load average:[[:space:]]*//' | cut -d, -f1 | tr -d ' '
+      _ps_stints "$sby" | sed 's/^/T\t/'
+      return
+    fi
+    echo "== open agent sessions (stints) — RAM = whole process tree, % of total =="
+    printf "  %5s %7s %5s %6s %-8s %s\n" "RAM%" "RAM" "CPU%" "PROCS" "AGENT" "PROJECT"
+    local any=0 pct rssmb cpu n kind proj
+    while IFS="$(printf '\t')" read -r pct rssmb cpu n kind proj; do
+      any=1; printf "  %4s%% %6sM %4s%% %5sp %-8s %s\n" "$pct" "$rssmb" "$cpu" "$n" "$kind" "$proj"
+    done < <(_ps_stints "$sby")
+    [ "$any" = 0 ] && echo "  (no open agent sessions)"
+    return
+  fi
   local mempct; mempct=$(free 2>/dev/null | awk '/Mem:/{if($2>0)printf "%d",($2-$7)/$2*100}')
   if [ "${1:-}" = --sum ]; then
     local s; s=$(_ps_rows | awk -F'\t' '{n++;cpu+=$1;rss+=$2} END{printf "%d %.0f %d",n+0,cpu+0,rss+0}')
