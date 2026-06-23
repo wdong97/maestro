@@ -10,7 +10,7 @@ Keys:  j/k or arrows = move   a/enter = follow output (read-only)   x = stop run
        p = toggle resources/output   / = filter   r = refresh   q = quit
 Auto-refreshes every ~1.5s; the bottom pane live-previews the selected run's log.
 """
-import curses, os, re, subprocess, time
+import curses, os, re, shlex, subprocess, time
 
 ENSEMBLE = os.environ.get("ENSEMBLE_BIN", "ensemble")
 REFRESH_MS = 1500
@@ -245,7 +245,9 @@ def main(scr):
             if shown:
                 # read-only: follow the run's log (tail -f). Never attach to the live
                 # tmux session, so keystrokes can't reach — or disrupt — the agent.
-                run_fullscreen(f"{ENSEMBLE} tail {shown[sel]['name']}")
+                # shlex.quote the name: it comes from `jobs` (a --name can hold shell
+                # metachars), and run_fullscreen runs it through os.system.
+                run_fullscreen(f"{shlex.quote(ENSEMBLE)} tail {shlex.quote(shown[sel]['name'])}")
                 scr.timeout(REFRESH_MS); jobs = get_jobs()
         elif c == ord("x"):
             # the one write action: stop the selected run, behind a y/N confirm.

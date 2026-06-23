@@ -45,12 +45,16 @@ have git  || die "git not found"
 # Agent invocations that READ THE PROMPT FROM STDIN (no positional prompt arg).
 # $1=mode(ro|rw) $2=model(or "") $3=workdir
 claude_cmd() {
+  # the model id is interpolated into a generated runner script; keep it to an
+  # id-safe charset so a crafted --model/--mc/--to value can't inject shell.
+  case "$2" in *[!A-Za-z0-9._:-]*) die "invalid model name: $2";; esac
   local pm; [ "$1" = rw ] && pm=bypassPermissions || pm=plan
   local m=""; [ -n "$2" ] && m="--model $2"
   printf 'claude -p %s --permission-mode %s --add-dir %q --output-format text' "$m" "$pm" "$3"
 }
 # $1=mode $2=model $3=effort $4=workdir $5=outfile  (trailing '-' = read stdin)
 codex_cmd() {
+  case "$2" in *[!A-Za-z0-9._:-]*) die "invalid model name: $2";; esac
   local sb; [ "$1" = rw ] && sb="--sandbox workspace-write --full-auto" || sb="--sandbox read-only"
   printf "codex exec -C %q --skip-git-repo-check %s -m %s -c model_reasoning_effort=%q -c service_tier='\"fast\"' -o %q -" \
     "$4" "$sb" "$2" "\"$3\"" "$5"
@@ -287,6 +291,9 @@ cmd_clean() {
   # With NAME: remove only that run's session, dir, worktrees, and ens/<name>/* branches.
   # Without NAME (use --all): prune every ensemble worktree + ens/* branch.
   if [ "$name" = --all ]; then name=""; fi
+  # run names are slugs; reject path separators so a crafted name can't make the
+  # rm -rf below escape $BASE_DIR (e.g. `clean ../../.ssh`).
+  case "$name" in */*|*..*) die "invalid run name '$name' — no '/' or '..' (see: ensemble jobs)";; esac
   if [ -n "$name" ]; then
     tmux kill-session -t "duel-$name" 2>/dev/null
     pat="/duel/$name/wt-|/spawn/$name/"; local brpat="ens/$name/"
