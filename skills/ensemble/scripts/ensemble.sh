@@ -557,7 +557,8 @@ cmd_ps() {
     free -b 2>/dev/null | awk '/Mem:/{printf "SYS\t%d\t%.1f\t%.1f\t",($2?($2-$7)/$2*100:0),($2-$7)/2^30,$2/2^30}'
     free 2>/dev/null | awk '/Swap:/{printf "%d\t",($2>0?$3/$2*100:0)}'
     uptime 2>/dev/null | sed -E 's/.*load average:[[:space:]]*//' | cut -d, -f1 | tr -d ' '
-    _ps_rows "${2:-cpu}" | sed 's/^/A\t/'
+    local pby=cpu; [ "${2:-}" = --by ] && pby="${3:-cpu}"
+    _ps_rows "$pby" | sed 's/^/A\t/'
     return
   fi
   local by=cpu; [ "${1:-}" = --by ] && by="${2:-cpu}"
