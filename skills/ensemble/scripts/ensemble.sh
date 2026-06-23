@@ -193,6 +193,7 @@ cmd_delegate() {
   [ -n "$prompt" ] || die "delegate needs a PROMPT"
   local r fam id; r="$(_resolve_model "$to")"; fam="${r%%|*}"; id="${r#*|}"
   [ -n "$fam" ] || die "unknown model '$to' — try: opus|fable|sonnet|haiku|codex|gpt-5.5|claude-…|gpt-…"
+  wd="$(cd "$wd" 2>/dev/null && pwd)" || die "delegate: --dir not found: $wd"   # absolute, so cd + -C/--add-dir agree
   [ -z "$name" ] && name="d-$(slug "$to")-$(date +%s)"
   local dir="$BASE_DIR/dispatch"; mkdir -p "$dir"
   local log="$dir/$name.log" out="$dir/$name.out" done="$dir/$name.done" pf="$dir/$name.prompt" runner="$dir/$name.run.sh"
