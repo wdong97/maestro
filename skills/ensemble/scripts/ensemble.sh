@@ -648,8 +648,10 @@ _reap_servers() {
   ps -eo pid=,rss=,comm=,args= 2>/dev/null | awk -v MIN="$minmb" '
     { l=tolower($0); name=$3; mb=$2/1024 }
     mb >= MIN \
-      && name !~ /^(bash|sh|npm|pnpm|yarn|make|python|python3|awk|node)$/ \
-      && ( name ~ /^(next-server|vite|webpack|nodemon)$/ || l ~ /next-server|vite|webpack-dev-server|webpack serve/ ) \
+      && name !~ /^(bash|sh|npm|pnpm|yarn|make|python|python3|awk)$/ \
+      && ( name ~ /^(next-server|vite|webpack|nodemon)$/ \
+           || (name=="node" && l ~ /vite|webpack-dev-server|webpack serve|next dev|next-server/) \
+           || l ~ /next-server/ ) \
       && l !~ / -eo |ensemble|maestro\/bin/ { printf "%s\t%s\t%s\n", $1, $2, name }'
 }
 
@@ -703,12 +705,17 @@ cmd_reap() {
   [ $((nsess+nsrv)) -eq 0 ] && { echo "[reap] nothing to close."; return 0; }
   if [ "$dry" = 1 ]; then echo "[reap] dry run — nothing closed. Re-run without --dry-run to confirm + close."; return 0; fi
   if [ "$yes" != 1 ]; then
-    if [ -e /dev/tty ]; then
-      printf '\nClose all of the above? [y/N] ' >&2; read -r a </dev/tty
-      case "$a" in y|Y|yes) ;; *) echo "[reap] aborted — nothing closed."; return 1;; esac
-    else
-      echo "[reap] non-interactive — re-run with --yes to close, or --dry-run to just list."; return 1
+    local a=""
+    if [ -t 0 ] && [ -t 1 ]; then
+      printf '\nClose all of the above? [y/N] ' >&2; read -r a || a=""
+    elif [ -r /dev/tty ]; then
+      printf '\nClose all of the above? [y/N] ' >&2; read -r a 2>/dev/null </dev/tty || a=""
     fi
+    case "$a" in
+      y|Y|yes) ;;
+      "") echo "[reap] no terminal to confirm — re-run with --yes to close, or --dry-run to just list."; return 1;;
+      *)  echo "[reap] aborted — nothing closed."; return 1;;
+    esac
   fi
   local k surv
   for k in $kill_pids; do kill "$k" 2>/dev/null; done
