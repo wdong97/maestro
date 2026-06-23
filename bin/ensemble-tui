@@ -12,25 +12,41 @@ import curses, os, subprocess, time
 
 ENSEMBLE = os.environ.get("ENSEMBLE_BIN", "ensemble")
 REFRESH_MS = 1500
-RES = ""        # latest `ensemble ps --sum` line, shown in the header
-PANE = "log"    # bottom pane: "log" (selected run's output) or "res" (resource list)
-PS_LINES = []   # latest `ensemble ps` detail lines (system + per-agent)
+PANE = "res"    # bottom pane default: "res" (resource task-manager) or "log" (run output)
+PS_SYS = {}     # latest system stats {rampct, used, total, swappct, load}
+PS_AGENTS = []  # latest per-agent rows [{cpu, rss, mem, pid, kind, proj}]
 
 
-def get_res():
+def _num(x):
+    try: return float(x)
+    except (ValueError, TypeError): return 0.0
+
+
+def get_ps_data():
+    sysd, agents = {}, []
     try:
-        return subprocess.run([ENSEMBLE, "ps", "--sum"], capture_output=True,
-                              text=True, timeout=5).stdout.strip()
+        out = subprocess.run([ENSEMBLE, "ps", "--porcelain"], capture_output=True,
+                             text=True, timeout=8).stdout
     except Exception:
-        return ""
+        return sysd, agents
+    for line in out.splitlines():
+        p = line.split("\t")
+        if p[0] == "SYS" and len(p) >= 6:
+            sysd = dict(rampct=_num(p[1]), used=p[2], total=p[3], swappct=_num(p[4]), load=p[5])
+        elif p[0] == "A" and len(p) >= 7:
+            agents.append(dict(cpu=_num(p[1]), rss=int(p[2] or 0), mem=_num(p[3]),
+                               pid=p[4], kind=p[5], proj=p[6]))
+    return sysd, agents
 
 
-def get_ps():
-    try:
-        out = subprocess.run([ENSEMBLE, "ps"], capture_output=True, text=True, timeout=8).stdout
-        return out.splitlines()
-    except Exception:
-        return ["(ensemble ps failed)"]
+def bar(val, mx, width):
+    mx = mx or 1
+    f = int(round(min(val, mx) / mx * width))
+    return "█" * f + "░" * (width - f)
+
+
+def sev(pct, hi, mid):
+    return curses.color_pair(3) if pct >= hi else curses.color_pair(2) if pct >= mid else curses.color_pair(1)
 
 
 def hms(s):
@@ -92,7 +108,9 @@ def _add(scr, y, x, s, attr=0):
 def draw(scr, jobs, sel, filt, msg):
     scr.erase()
     h, w = scr.getmaxyx()
-    sub = f"  {len(jobs)} runs" + (f"  ·  {RES}" if RES else "") + (f"  filter:'{filt}'" if filt else "")
+    ncpu = sum(a["cpu"] for a in PS_AGENTS)
+    rp = PS_SYS.get("rampct", 0)
+    sub = f"  {len(jobs)} runs  ·  {len(PS_AGENTS)} agents  cpu {ncpu:.0f}%  ram {rp:.0f}%" + (f"  filter:'{filt}'" if filt else "")
     _add(scr, 0, 0, ("maestro dashboard" + sub).ljust(w), curses.A_BOLD | curses.A_REVERSE)
 
     list_h = max(3, (h - 6) // 2)
@@ -108,9 +126,24 @@ def draw(scr, jobs, sel, filt, msg):
     py = 2 + list_h
     avail = h - py - 3
     if PANE == "res":
-        _add(scr, py, 0, ("── resources (codex/claude agents) " + "─" * w), curses.A_DIM)
-        for k, ln in enumerate(PS_LINES[:avail]):
-            _add(scr, py + 1 + k, 0, ln.rstrip("\n"))
+        _add(scr, py, 0, ("── agents — sorted by cpu (press p for run output) " + "─" * w), curses.A_DIM)
+        r = py + 1
+        s = PS_SYS
+        if s:
+            rpv = s["rampct"]
+            sysline = (f"  RAM {rpv:>3.0f}% [{bar(rpv, 100, 14)}] {s['used']}/{s['total']}G"
+                       f"   swap {s['swappct']:>3.0f}%   load {s['load']}")
+            _add(scr, r, 0, sysline, sev(rpv, 85, 60) | curses.A_BOLD); r += 1
+        _add(scr, r, 0, f"   {'CPU':>5}  {'':12}  {'RAM':>6} {'%MEM':>5} {'PID':<7} {'AGENT':<13} PROJECT",
+             curses.A_DIM); r += 1
+        maxcpu = max((a["cpu"] for a in PS_AGENTS), default=1) or 1
+        for a in PS_AGENTS:
+            if r >= h - 1:
+                break
+            att = sev(a["cpu"], maxcpu * 0.6, maxcpu * 0.25)
+            row = (f"  {a['cpu']:>5.1f}% {bar(a['cpu'], maxcpu, 12)} {a['rss']:>5}M "
+                   f"{a['mem']:>4.1f}% {a['pid']:<7} {a['kind']:<13} {a['proj']}")
+            _add(scr, r, 0, row, att); r += 1
     else:
         _add(scr, py, 0, ("── output " + "─" * w), curses.A_DIM)
         if jobs:
@@ -135,10 +168,17 @@ def prompt(scr, label):
 
 
 def main(scr):
-    global RES, PANE, PS_LINES
+    global PANE, PS_SYS, PS_AGENTS
     curses.curs_set(0); scr.timeout(REFRESH_MS)
+    try:
+        curses.start_color(); curses.use_default_colors()
+        for i, fg in enumerate((curses.COLOR_GREEN, curses.COLOR_YELLOW,
+                                curses.COLOR_RED, curses.COLOR_CYAN), 1):
+            curses.init_pair(i, fg, -1)
+    except curses.error:
+        pass
     sel, filt, msg = 0, "", ""
-    jobs = get_jobs(); RES = get_res()
+    jobs = get_jobs(); PS_SYS, PS_AGENTS = get_ps_data()
     last = time.time()
     while True:
         shown = [j for j in jobs if filt.lower() in j["name"].lower()] if filt else jobs
@@ -148,19 +188,16 @@ def main(scr):
         c = scr.getch()
         if c == -1:
             if time.time() - last > REFRESH_MS / 1000:
-                jobs = get_jobs(); RES = get_res()
-                if PANE == "res": PS_LINES = get_ps()
+                jobs = get_jobs(); PS_SYS, PS_AGENTS = get_ps_data()
                 last = time.time()
             continue
         if c in (ord("q"),): break
         elif c in (curses.KEY_DOWN, ord("j")): sel += 1
         elif c in (curses.KEY_UP, ord("k")): sel -= 1
         elif c == ord("p"):
-            PANE = "res" if PANE == "log" else "log"
-            if PANE == "res": PS_LINES = get_ps()
+            PANE = "log" if PANE == "res" else "res"
         elif c in (ord("r"),):
-            jobs = get_jobs(); RES = get_res()
-            if PANE == "res": PS_LINES = get_ps()
+            jobs = get_jobs(); PS_SYS, PS_AGENTS = get_ps_data()
             last = time.time()
         elif c == ord("/"): filt = prompt(scr, "filter:")
         elif c in (ord("a"), ord("\n"), curses.KEY_ENTER, 10, 13):

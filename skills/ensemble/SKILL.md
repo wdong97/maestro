@@ -116,8 +116,8 @@ launching session, tmux, or a headless dispatch). Output always persists to file
 so "I can't see it" is solved even after tmux/the session is gone.
 
 ```bash
-scripts/ensemble.sh dash           # interactive TUI: select a run, live-preview its output,
-                                   #   a=attach/follow  x=kill  p=resources(process/RAM)  /=filter  q=quit
+scripts/ensemble.sh dash           # interactive TUI: opens to the live resource task-manager
+                                   #   (agents sorted by CPU + RAM gauge); a=attach  x=kill  p=output  /=filter  q=quit
 scripts/ensemble.sh jobs           # one-shot list of every run: status, age, output path
 scripts/ensemble.sh tail <name>    # follow a run's output live (or `last` for the most recent)
 scripts/ensemble.sh watch          # plain-text auto-refreshing list (no interactivity)

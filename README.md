@@ -61,7 +61,7 @@ review) is listed with status, from any terminal:
 ```bash
 ensemble jobs                 # one-shot list of all runs
 ensemble tail <name|last>     # follow one run's output live
-ensemble dash                 # interactive TUI (real terminal); press `p` for the live process/RAM pane
+ensemble dash                 # interactive TUI (real terminal); opens to the live resource task-manager, `p` toggles run output
 ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted by CPU/RAM w/ %MEM + project
 ```
 

@@ -524,32 +524,11 @@ MD
   fi
 }
 
-# Live process/RAM view of the agents. `--sum` prints a one-line machine summary.
+# Emit sorted agent rows: cpu \t rssMB \t mem% \t pid \t kind-mode \t project.
 # Matches real agent processes (executable codex/claude, or a codex exec|resume /
 # claude -p invocation) — not every helper that merely references a .claude path.
-cmd_ps() {
-  # system RAM "in use" % (total - available), the task-manager-style gauge.
-  local mempct; mempct=$(free 2>/dev/null | awk '/Mem:/{if($2>0)printf "%d",($2-$7)/$2*100}')
-  if [ "${1:-}" = --sum ]; then
-    local s; s=$(ps -eo pcpu=,rss=,comm=,args= 2>/dev/null | awk '
-      { c=$3; l=tolower($0) }
-      (c=="codex"||c=="claude" || l ~ /codex exec|codex resume|claude -p/) \
-        && l !~ /ensemble\.sh|ensemble-tui|status\.py|maestro\/bin|awk| -eo / { n++; cpu+=$1; rss+=$2 }
-      END { printf "%d %.1f %d", n+0, cpu+0, (rss+0)/1024 }')
-    printf "agents=%s cpu=%s%% rss=%sM mem=%s%%\n" ${s:-0 0 0} "${mempct:-?}"
-    return
-  fi
-  # task-manager view: agents sorted by CPU (or RAM with --by rss), with each
-  # agent's share of total RAM (%MEM) and the project (cwd) it's working in.
-  local by=cpu; [ "${1:-}" = --by ] && by="${2:-cpu}"
-  echo "== system =="
-  free -b 2>/dev/null | awk '
-    /Mem:/  { printf "  RAM:  %3d%% in use   (%.1fG of %.1fG)   %.1fG available\n", ($2?($2-$7)/$2*100:0), ($2-$7)/1073741824, $2/1073741824, $7/1073741824 }
-    /Swap:/ { if($2>0) printf "  swap: %3d%% in use   (%.1fG of %.1fG)\n", $3/$2*100, $3/1073741824, $2/1073741824 }'
-  uptime 2>/dev/null | grep -oE 'load average.*' | sed 's/^/  /'
-  echo "== agents — sorted by ${by} (top first; %MEM = share of total RAM; PROJECT = cwd) =="
-  printf "  %5s %7s %5s %-8s %-13s %s\n" "CPU%" "RAM" "%MEM" "PID" "AGENT" "PROJECT"
-  local rows
+_ps_rows() {
+  local by="${1:-cpu}" rows
   rows=$(ps -eo pid=,pcpu=,pmem=,rss=,comm=,args= 2>/dev/null | awk '
     { c=$5; l=tolower($0) }
     (c=="codex"||c=="claude" || l ~ /codex exec|codex resume|claude -p/) \
@@ -558,14 +537,42 @@ cmd_ps() {
       mode=(l~/exec/)?"exec":((l~/ -p/)?"-p":((l~/resume/)?"resume":"session"));
       dir=""; for(i=6;i<=NF;i++){ if($i=="-C"||$i=="--add-dir"||$i=="--cd"){dir=$(i+1);break} }
       printf "%s\t%s\t%s\t%s\t%s-%s\t%s\n",$1,$2,$3,$4,kind,mode,dir }')
-  [ -z "$rows" ] && { echo "  (no live codex/claude agent processes)"; return; }
+  [ -z "$rows" ] && return
   printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r pid cpu pmem rss km dir; do
     cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null); [ -n "$cwd" ] && dir="$cwd"   # cwd is the best convo id
     printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$cpu" "$((rss/1024))" "$pmem" "$pid" "$km" "$(basename "${dir:-?}")"
-  done | sort -t"$(printf '\t')" -k"$([ "$by" = rss ] && echo 2 || echo 1)" -rn | \
+  done | sort -t"$(printf '\t')" -k"$([ "$by" = rss ] && echo 2 || echo 1)" -rn
+}
+
+# Live process/RAM view. `--sum` = one-line summary; `--porcelain` = machine rows
+# (SYS line + per-agent rows) for the dashboard; `--by rss` sorts by RAM.
+cmd_ps() {
+  local mempct; mempct=$(free 2>/dev/null | awk '/Mem:/{if($2>0)printf "%d",($2-$7)/$2*100}')
+  if [ "${1:-}" = --sum ]; then
+    local s; s=$(_ps_rows | awk -F'\t' '{n++;cpu+=$1;rss+=$2} END{printf "%d %.0f %d",n+0,cpu+0,rss+0}')
+    printf "agents=%s cpu=%s%% rss=%sM mem=%s%%\n" ${s:-0 0 0} "${mempct:-?}"
+    return
+  fi
+  if [ "${1:-}" = --porcelain ]; then
+    free -b 2>/dev/null | awk '/Mem:/{printf "SYS\t%d\t%.1f\t%.1f\t",($2?($2-$7)/$2*100:0),($2-$7)/2^30,$2/2^30}'
+    free 2>/dev/null | awk '/Swap:/{printf "%d\t",($2>0?$3/$2*100:0)}'
+    uptime 2>/dev/null | sed -E 's/.*load average:[[:space:]]*//' | cut -d, -f1 | tr -d ' '
+    _ps_rows "${2:-cpu}" | sed 's/^/A\t/'
+    return
+  fi
+  local by=cpu; [ "${1:-}" = --by ] && by="${2:-cpu}"
+  echo "== system =="
+  free -b 2>/dev/null | awk '
+    /Mem:/  { printf "  RAM:  %3d%% in use   (%.1fG of %.1fG)   %.1fG available\n", ($2?($2-$7)/$2*100:0), ($2-$7)/2^30, $2/2^30, $7/2^30 }
+    /Swap:/ { if($2>0) printf "  swap: %3d%% in use   (%.1fG of %.1fG)\n", $3/$2*100, $3/2^30, $2/2^30 }'
+  uptime 2>/dev/null | grep -oE 'load average.*' | sed 's/^/  /'
+  echo "== agents — sorted by ${by} (top first; %MEM = share of total RAM; PROJECT = cwd) =="
+  printf "  %5s %7s %5s %-8s %-13s %s\n" "CPU%" "RAM" "%MEM" "PID" "AGENT" "PROJECT"
+  local any=0 cpu rssmb pmem pid km proj
   while IFS="$(printf '\t')" read -r cpu rssmb pmem pid km proj; do
-    printf "  %4s%% %6sM %4s%% %-8s %-13s %s\n" "$cpu" "$rssmb" "$pmem" "$pid" "$km" "$proj"
-  done
+    any=1; printf "  %4s%% %6sM %4s%% %-8s %-13s %s\n" "$cpu" "$rssmb" "$pmem" "$pid" "$km" "$proj"
+  done < <(_ps_rows "$by")
+  [ "$any" = 0 ] && echo "  (no live codex/claude agent processes)"
 }
 
 cmd_watch() {
