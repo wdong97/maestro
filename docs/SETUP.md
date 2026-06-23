@@ -98,10 +98,15 @@ tmux attach -t duel-<name>     # watch both panes; Ctrl-b d to detach
 When both finish, the orchestrating agent reads `~/.ensemble/duel/<name>/{claude,codex}.out`
 and synthesizes. From inside Claude use `/duel`; from Codex use `$duel`.
 
-### Delegate — hand work to the other model
-From a Claude session running Fable: `delegate-fable` (keep planning, send the build
-to Codex). From Opus: `delegate-opus`. From Codex: `delegate-codex` (send taste/UI
-work to Claude). Effort scales to the task — trivial work doesn't pay for `xhigh`.
+### Delegate — hand work to another model
+Keep planning and taste in your session; dispatch the build to any implementer:
+```bash
+ensemble delegate --to codex --eff high "Implement <spec>; keep tests green."
+ensemble delegate --to opus "Polish the dashboard layout; match existing styles."
+```
+`--to` takes `opus | fable | sonnet | haiku | codex | gpt-5.5` or a full model id, and
+auto-routes to the right CLI. Effort scales to the task (Codex), so trivial work
+doesn't pay for `xhigh`. It runs in the background and shows in `ensemble jobs`.
 
 ### Review on every push
 Just push. The hook has the other agent review your diff and asks before it leaves:

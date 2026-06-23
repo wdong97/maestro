@@ -39,12 +39,17 @@ side-by-side tmux panes; the orchestrator reads both and synthesizes the best
 result. Add `--rw` to have each implement in its own git worktree, then merge the
 winner. In Claude: `/duel`. In Codex: `$duel`.
 
-**Hand work to the other agent — `delegate` / `spawn`.** Keep planning and taste
-where it's strongest; send mechanical/bulk work to the cheaper model. Effort scales
-to the task (`--eff low|medium|high|xhigh`). Variants: `delegate-fable`,
-`delegate-opus` (Claude orchestrates → Codex builds), `delegate-codex` (Codex
-orchestrates → Claude builds). `ensemble spawn <agent> "<task>"` runs one peer in a
-tmux window you can watch.
+**Hand work to another model — `delegate`.** Keep planning and taste in your
+current session; dispatch mechanical/bulk work to any implementer you pick:
+
+```bash
+ensemble delegate --to <model> [--eff low|medium|high|xhigh] [--ro] "<spec>"
+# --to: opus | fable | sonnet | haiku | codex | gpt-5.5 | any full model id
+```
+
+It auto-routes to the Codex or Claude CLI by model name, runs in the background,
+and shows in `ensemble jobs`. For a *watchable* peer in a tmux window instead, use
+`ensemble spawn <claude|codex> "<task>"`.
 
 **Review before every push.** A global `pre-push` hook has the *other* agent review
 your diff and prompt before it leaves. Bypass once with `ENSEMBLE_REVIEW=0 git push`.

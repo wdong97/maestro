@@ -17,8 +17,9 @@ Resolve the script path relative to this skill dir. Read-only is the default;
 `--rw` isolates each writer in its own git worktree+branch.
 
 This complements the existing skills — it does not replace them:
-- **`delegate`** = headless, cost-optimized dispatch to Codex (output in a CC
-  background panel). Use it when you do **not** need to watch.
+- **`delegate`** (`ensemble delegate --to <model>`) = headless, cost-optimized
+  dispatch to **any** model (Codex or Claude, auto-routed); shows in `ensemble jobs`.
+  Use it when you do **not** need to watch.
 - **`ensemble`** = the same idea but **watchable in real tmux panes**, plus a
   symmetric duel and a push-time review gate.
 - **`agent-sync`** = handoff packets / session resume. Use it to brief either arm

@@ -52,8 +52,22 @@ claude_cmd() {
 # $1=mode $2=model $3=effort $4=workdir $5=outfile  (trailing '-' = read stdin)
 codex_cmd() {
   local sb; [ "$1" = rw ] && sb="--sandbox workspace-write --full-auto" || sb="--sandbox read-only"
-  printf 'codex exec -C %q --skip-git-repo-check %s -m %s -c model_reasoning_effort=%q -o %q -' \
+  printf "codex exec -C %q --skip-git-repo-check %s -m %s -c model_reasoning_effort=%q -c service_tier='\"fast\"' -o %q -" \
     "$4" "$sb" "$2" "\"$3\"" "$5"
+}
+
+# Resolve a friendly model name (or full id) to "family|model-id".
+_resolve_model() {
+  case "$1" in
+    opus)       echo "claude|claude-opus-4-8";;
+    fable)      echo "claude|claude-fable-5";;
+    sonnet)     echo "claude|claude-sonnet-4-6";;
+    haiku)      echo "claude|claude-haiku-4-5-20251001";;
+    claude-*)   echo "claude|$1";;
+    codex)      echo "codex|$CODEX_MODEL_DEFAULT";;
+    gpt-*|gpt5*|o[0-9]*) echo "codex|$1";;
+    *)          echo "|$1";;   # unknown family -> caller errors
+  esac
 }
 
 # Run one agent in a tmux pane: stream live, tee clean answer to OUT, capture the
@@ -162,6 +176,42 @@ cmd_spawn() {
   launch_pane "$sess" "$name" "$agent" "$prompt" "$tee_target" "$dir/run.log" "$dir/run.done"
   echo "[ensemble] spawned $who as window '$name' in session '$sess'"
   echo "[ensemble]   watch: tmux attach -t $sess   out: $dir/out.txt   done: $dir/run.done"
+}
+
+# Headless, cost-aware delegation to ANY model. Model-agnostic: --to picks the
+# implementer (auto-routes to Codex or Claude by model family); runs in the
+# background (zombie-proof) writing to ~/.ensemble/dispatch so it shows in `jobs`.
+#   ensemble delegate --to <model> [--from <model>] [--eff E] [--ro] [--name N] [--dir D] "PROMPT"
+cmd_delegate() {
+  local to="" from="" eff="$CODEX_EFFORT_DEFAULT" mode=rw name="" prompt="" wd="$ROOT_DEFAULT"
+  while [ $# -gt 0 ]; do case "$1" in
+    --to) to="$2"; shift;; --from) from="$2"; shift;; --eff) eff="$2"; shift;;
+    --ro) mode=ro;; --name) name="$2"; shift;; --dir) wd="$2"; shift;;
+    --) shift; prompt="$*"; break;; -*) die "unknown delegate flag $1";; *) prompt="$*"; break;;
+  esac; shift; done
+  [ -n "$to" ] || die "delegate needs --to <model> (opus|fable|sonnet|haiku|codex|gpt-5.5|claude-…|gpt-…)"
+  [ -n "$prompt" ] || die "delegate needs a PROMPT"
+  local r fam id; r="$(_resolve_model "$to")"; fam="${r%%|*}"; id="${r#*|}"
+  [ -n "$fam" ] || die "unknown model '$to' — try: opus|fable|sonnet|haiku|codex|gpt-5.5|claude-…|gpt-…"
+  [ -z "$name" ] && name="d-$(slug "$to")-$(date +%s)"
+  local dir="$BASE_DIR/dispatch"; mkdir -p "$dir"
+  local log="$dir/$name.log" out="$dir/$name.out" done="$dir/$name.done" pf="$dir/$name.prompt" runner="$dir/$name.run.sh"
+  rm -f "$done"; printf '%s' "$prompt" >"$pf"
+  local agent pipeline
+  if [ "$fam" = claude ]; then
+    agent="$(claude_cmd "$mode" "$id" "$wd")"
+    pipeline="cat $(printf %q "$pf") | $agent | tee $(printf %q "$out")"
+  else
+    agent="$(codex_cmd "$mode" "$id" "$eff" "$wd" "$out")"
+    pipeline="cat $(printf %q "$pf") | $agent"
+  fi
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n%s\nexit ${PIPESTATUS[1]}\n' "$pipeline" > "$runner"
+  echo "[delegate] from=${from:-this session} -> to=$id ($fam)  mode=$mode$([ "$fam" = codex ] && echo "  eff=$eff")"
+  echo "[delegate] run '$name'  |  follow: ensemble tail $name  |  clean result: $out"
+  ( timeout -k 1m "${ENSEMBLE_DELEGATE_TIMEOUT:-30m}" bash "$runner" </dev/null >"$log" 2>&1; echo $? >"$done" ) &
+  local cpid=$!
+  tail -n +1 --pid="$cpid" -f "$log"
+  echo "[delegate] $name finished (exit $(cat "$done"))  — read result: $out"
 }
 
 # Peer review of a diff. Default reviewer = codex (the free peer); --by both runs both.
@@ -378,7 +428,7 @@ _emit_jobs() {
     lg="$d/codex.log"; [ -f "$lg" ] || lg="$d/claude.out"
     printf 'review\t%s\t%s\t%s\t%s\n' "$name" "$st" "$(_age "$d")" "$lg"
   done
-  for f in "$HOME"/.codex/dispatch/*.log; do [ -f "$f" ] || continue; name=$(basename "$f" .log)
+  for f in "$HOME"/.codex/dispatch/*.log "$BASE_DIR"/dispatch/*.log; do [ -f "$f" ] || continue; name=$(basename "$f" .log)
     printf 'dispatch\t%s\t%s\t%s\t%s\n' "$name" "$(_donestat "${f%.log}.done")" "$(_age "$f")" "$f"
   done
 }
@@ -445,6 +495,7 @@ sub="${1:-}"; shift || true
 case "$sub" in
   duel)                cmd_duel "$@";;
   spawn)               cmd_spawn "$@";;
+  delegate)            cmd_delegate "$@";;
   review)              cmd_review "$@";;
   attach)              cmd_attach "$@";;
   jobs)                cmd_jobs "$@";;
@@ -463,6 +514,10 @@ ensemble — Claude + Codex together (tmux-visible)
   spawn <claude|codex> [--rw] [--dir D] [--mx M] [--eff low|medium|high|xhigh] "PROMPT"
        launch one peer in a viewable tmux window (delegation you can watch).
        --eff scales Codex reasoning to the task (default xhigh; lower = faster).
+  delegate --to <model> [--from <model>] [--eff E] [--ro] [--name N] [--dir D] "PROMPT"
+       headless cost-aware delegation to ANY model (opus|fable|sonnet|haiku|codex|
+       gpt-5.5|claude-…|gpt-…); auto-routes to the Codex or Claude CLI; runs in the
+       background and shows in `ensemble jobs` (follow with `ensemble tail <name>`).
   review [--base REF|--uncommitted|--commit SHA] [--by claude|codex|both]
        peer-review a diff (default reviewer: codex).
   jobs                 list every run (duel/spawn/review/dispatch) + status, from anywhere
