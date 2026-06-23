@@ -61,12 +61,25 @@ review) is listed with status, from any terminal:
 ```bash
 ensemble jobs                 # one-shot list of all runs
 ensemble tail <name|last>     # follow one run's output live
-ensemble dash                 # interactive TUI (real terminal); opens to the live resource task-manager, `p` toggles run output
+ensemble dash                 # interactive TUI (real terminal): live resource task-manager; `p` toggles run output
 ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted by CPU/RAM w/ %MEM + project
 ensemble ps --stints          # per open session (process tree summed): RAM % of total, CPU, #procs, project
-ensemble reap --dry-run       # list idle sessions + dev servers it would close (with RAM + total)
-ensemble reap                 # same list, then close them on a y/N confirm (never closes the session you run it from)
 ```
+
+The dashboard is read-only: you can watch any run, but keystrokes never reach a live
+agent. The one exception is `x` — it stops the selected run, and only after a y/N
+confirm.
+
+**Reclaim RAM — `reap` / `stop`.** Idle agents and dev servers add up. List what's
+worth closing, keep the ones you still want, and close the rest:
+
+```bash
+ensemble reap --dry-run       # numbered list of idle sessions + dev servers (RAM each + total)
+ensemble reap                 # keep the ones you name; close the rest on a y/N confirm
+ensemble stop <name>          # gracefully stop one run (SIGTERM→SIGKILL its tree) — dash's `x`
+```
+
+`reap` never closes the session you run it from.
 
 **Measure it — `report`.** A performance snapshot from real logged usage (reviews
 run, findings raised by severity, delegation success rate, tokens). See

@@ -116,14 +116,15 @@ launching session, tmux, or a headless dispatch). Output always persists to file
 so "I can't see it" is solved even after tmux/the session is gone.
 
 ```bash
-scripts/ensemble.sh dash           # interactive TUI: opens to per-session RAM% (tree summed) + RAM gauge;
-                                   #   a=attach  x=kill  p=output  /=filter  q=quit
+scripts/ensemble.sh dash           # interactive TUI (read-only watch): per-session RAM% (tree summed) + gauge;
+                                   #   a=follow output  x=stop run (y/N confirm)  p=output  /=filter  q=quit
 scripts/ensemble.sh jobs           # one-shot list of every run: status, age, output path
 scripts/ensemble.sh tail <name>    # follow a run's output live (or `last` for the most recent)
 scripts/ensemble.sh watch          # plain-text auto-refreshing list (no interactivity)
 scripts/ensemble.sh ps [--by rss]  # task-manager: per-process agents sorted by CPU/RAM + project
 scripts/ensemble.sh ps --stints    # per open SESSION: RAM % of total (whole process tree summed)
-scripts/ensemble.sh reap [--dry-run]  # reclaim RAM: list idle sessions + dev servers, close on y/N confirm
+scripts/ensemble.sh reap [--dry-run]  # reclaim RAM: list idle sessions + dev servers (numbered); keep some, close rest
+scripts/ensemble.sh stop <name>    # gracefully stop ONE run (SIGTERM→SIGKILL tree + tmux teardown); dash's x action
 scripts/ensemble.sh report [--md]  # performance snapshot: reviews, findings, success rate, tokens
 ```
 

@@ -656,7 +656,8 @@ _reap_servers() {
 }
 
 # Reclaim RAM: list idle agent sessions + dev servers, then close on confirm.
-# Default: list everything and ask y/N. --dry-run lists only; --yes skips the prompt.
+# Interactive: each item is numbered; you type the numbers to KEEP alive, then
+# confirm closing the rest. --dry-run lists only; --yes skips both prompts.
 cmd_reap() {
   local idlecpu="${ENSEMBLE_REAP_IDLE_CPU:-1}" olderh="${ENSEMBLE_REAP_OLDER_H:-4}" servers=1 yes=0 dry=0
   while [ $# -gt 0 ]; do case "$1" in
@@ -669,8 +670,10 @@ cmd_reap() {
   local anc=" " p=$$
   while [ "${p:-1}" -gt 1 ] 2>/dev/null; do anc="$anc$p "; p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null); done
 
-  local kill_pids="" total_mb=0 nsess=0 nsrv=0
-  local sess_out="" srv_out="" rootpid kind cpu age pids x files rkb mb proj np
+  # one entry per reapable item (sessions first, then servers); the index is what
+  # the user types to keep an item alive. it_pids[i]=pids  it_mb[i]=MB  it_line[i]=row
+  local -a it_pids it_mb it_line kept
+  local total_mb=0 n=0 rootpid kind cpu age pids x files rkb mb proj np
 
   while IFS="$(printf '\t')" read -r rootpid kind cpu age pids; do
     case "$anc" in *" $rootpid "*) continue;; esac                 # skip self/ancestors
@@ -679,49 +682,148 @@ cmd_reap() {
     rkb=$(awk '/^Pss:/{s+=$2} END{print s+0}' $files 2>/dev/null); mb=$((rkb/1024))
     proj=$(basename "$(readlink "/proc/$rootpid/cwd" 2>/dev/null || echo '?')")
     np=$(set -- $pids; echo $#)
-    sess_out="$sess_out$(printf '  %6sM  %-5s  %-7s %-24s %sp' "$mb" "$(_age_h "$age")" "$kind" "$proj" "$np")"$'\n'
-    kill_pids="$kill_pids $pids"; total_mb=$((total_mb+mb)); nsess=$((nsess+1))
+    n=$((n+1)); it_pids[n]="$pids"; it_mb[n]=$mb; total_mb=$((total_mb+mb))
+    it_line[n]=$(printf '%6sM  %-5s  %-7s %-24s %sp' "$mb" "$(_age_h "$age")" "$kind" "$proj" "$np")
   done < <(_reap_sessions)
+  local nsess=$n
 
   if [ "$servers" = 1 ]; then
     while IFS="$(printf '\t')" read -r spid srss sname; do
       case "$anc" in *" $spid "*) continue;; esac
       mb=$((srss/1024)); proj=$(basename "$(readlink "/proc/$spid/cwd" 2>/dev/null || echo '?')")
-      srv_out="$srv_out$(printf '  %6sM  %-14s %s' "$mb" "$sname" "$proj")"$'\n'
-      kill_pids="$kill_pids $spid"; total_mb=$((total_mb+mb)); nsrv=$((nsrv+1))
+      n=$((n+1)); it_pids[n]="$spid"; it_mb[n]=$mb; total_mb=$((total_mb+mb))
+      it_line[n]=$(printf '%6sM  %-14s %s' "$mb" "$sname" "$proj")
     done < <(_reap_servers)
   fi
+  local nsrv=$((n-nsess))
 
-  echo "ensemble reap — would close these (idle agent sessions: cpu<${idlecpu}%, idle >${olderh}h)"
+  echo "ensemble reap — idle agent sessions (cpu<${idlecpu}%, idle >${olderh}h) + dev servers"
   echo
   echo "Idle agent sessions ($nsess):"
-  [ -n "$sess_out" ] && printf '%s' "$sess_out" || echo "  (none)"
+  if [ "$nsess" -gt 0 ]; then
+    for x in $(seq 1 "$nsess"); do printf '  %2d  %s\n' "$x" "${it_line[x]}"; done
+  else echo "  (none)"; fi
   echo
   echo "Dev servers ($nsrv):"
-  if [ "$servers" = 1 ]; then [ -n "$srv_out" ] && printf '%s' "$srv_out" || echo "  (none)"; else echo "  (skipped: --no-servers)"; fi
+  if [ "$servers" != 1 ]; then echo "  (skipped: --no-servers)"
+  elif [ "$nsrv" -gt 0 ]; then
+    for x in $(seq $((nsess+1)) "$n"); do printf '  %2d  %s\n' "$x" "${it_line[x]}"; done
+  else echo "  (none)"; fi
   echo
-  echo "TOTAL: $((nsess+nsrv)) items, ~${total_mb} MB reclaimable."
+  echo "TOTAL: $n items, ~${total_mb} MB reclaimable."
 
-  [ $((nsess+nsrv)) -eq 0 ] && { echo "[reap] nothing to close."; return 0; }
-  if [ "$dry" = 1 ]; then echo "[reap] dry run — nothing closed. Re-run without --dry-run to confirm + close."; return 0; fi
+  [ "$n" -eq 0 ] && { echo "[reap] nothing to close."; return 0; }
+  if [ "$dry" = 1 ]; then echo "[reap] dry run — nothing closed. Re-run without --dry-run to choose + close."; return 0; fi
+
+  # choose what to KEEP alive (default keeps none), then confirm closing the rest
+  local ttydev="" k surv
   if [ "$yes" != 1 ]; then
+    if [ -t 0 ] && [ -t 1 ]; then ttydev=""        # read from stdin
+    elif [ -r /dev/tty ]; then ttydev=/dev/tty      # read from controlling tty
+    else echo "[reap] no terminal to confirm — re-run with --yes to close, or --dry-run to just list."; return 1; fi
+
     local a=""
-    if [ -t 0 ] && [ -t 1 ]; then
-      printf '\nClose all of the above? [y/N] ' >&2; read -r a || a=""
-    elif [ -r /dev/tty ]; then
-      printf '\nClose all of the above? [y/N] ' >&2; read -r a 2>/dev/null </dev/tty || a=""
-    fi
+    printf '\nKeep any alive? type their numbers (e.g. 2 5), or [Enter] to keep none:\n> ' >&2
+    if [ -n "$ttydev" ]; then read -r a 2>/dev/null <"$ttydev" || a=""; else read -r a || a=""; fi
     case "$a" in
-      y|Y|yes) ;;
-      "") echo "[reap] no terminal to confirm — re-run with --yes to close, or --dry-run to just list."; return 1;;
-      *)  echo "[reap] aborted — nothing closed."; return 1;;
+      q|Q|quit|cancel) echo "[reap] cancelled — nothing closed."; return 1;;
+      "") ;;                                        # keep none → close everything
+      *) local keep bad=""
+         for keep in $a; do
+           case "$keep" in *[!0-9]*) bad="$bad $keep"; continue;; esac
+           if [ "$keep" -ge 1 ] && [ "$keep" -le "$n" ]; then kept[$keep]=1; else bad="$bad $keep"; fi
+         done
+         [ -n "$bad" ] && echo "[reap] ignored (not item numbers 1-$n):$bad" >&2;;
     esac
   fi
-  local k surv
-  for k in $kill_pids; do kill "$k" 2>/dev/null; done
+
+  # build the close-list from everything not kept
+  local final_pids="" close_mb=0 nclose=0 nkept=0 kept_mb=0 i
+  for i in $(seq 1 "$n"); do
+    if [ "${kept[i]:-0}" = 1 ]; then nkept=$((nkept+1)); kept_mb=$((kept_mb+it_mb[i]))
+    else final_pids="$final_pids ${it_pids[i]}"; nclose=$((nclose+1)); close_mb=$((close_mb+it_mb[i])); fi
+  done
+  if [ "$nclose" -eq 0 ]; then echo "[reap] all $nkept item(s) kept — nothing closed."; return 0; fi
+
+  if [ "$yes" != 1 ]; then
+    local c="" keepnote=""
+    [ "$nkept" -gt 0 ] && keepnote="  keeping $nkept (~${kept_mb} MB)."
+    printf 'Close %d item(s) (~%d MB)?%s  [y/N] ' "$nclose" "$close_mb" "$keepnote" >&2
+    if [ -n "$ttydev" ]; then read -r c 2>/dev/null <"$ttydev" || c=""; else read -r c || c=""; fi
+    case "$c" in y|Y|yes) ;; *) echo "[reap] aborted — nothing closed."; return 1;; esac
+  fi
+
+  for k in $final_pids; do kill "$k" 2>/dev/null; done
   sleep 2
-  surv=""; for k in $kill_pids; do kill -0 "$k" 2>/dev/null && { kill -9 "$k" 2>/dev/null; surv="$surv $k"; }; done
-  echo "[reap] closed $((nsess+nsrv)) items (~${total_mb} MB).${surv:+  force-killed:$surv}"
+  surv=""; for k in $final_pids; do kill -0 "$k" 2>/dev/null && { kill -9 "$k" 2>/dev/null; surv="$surv $k"; }; done
+  echo "[reap] closed $nclose items (~${close_mb} MB).${surv:+  force-killed:$surv}"
+}
+
+_descendants() { local pid="$1" k; printf '%s\n' "$pid"; for k in $(pgrep -P "$pid" 2>/dev/null); do _descendants "$k"; done; }
+
+# Gracefully stop ONE run by name: SIGTERM its process tree, give it a moment to
+# flush, SIGKILL survivors, then tear down its tmux window/session. Used by `dash`
+# (the only write action there, behind a y/N confirm) and usable from the shell.
+cmd_stop() {
+  local yes=0; case "${1:-}" in --yes|-y) yes=1; shift;; esac
+  local id="${1:-}"; [ -n "$id" ] || die "stop needs a run NAME (see: ensemble jobs)"
+  local rows row kind name logf rundir; rows="$(_emit_jobs)"
+  row="$(echo "$rows" | awk -F"$(printf '\t')" -v n="$id" '$2==n{print;exit}')"
+  [ -n "$row" ] || row="$(echo "$rows" | awk -F"$(printf '\t')" -v n="$id" 'index($2,n){print;exit}')"
+  [ -n "$row" ] || { echo "[stop] no run matching '$id' — see: ensemble jobs"; return 1; }
+  kind="$(echo "$row" | cut -f1)"; name="$(echo "$row" | cut -f2)"
+  logf="$(echo "$row" | cut -f5)"; rundir="$(dirname "$logf")"
+
+  # resolve the run's root pids (+ the tmux object to clean up afterwards)
+  local roots="" tmux_obj="" tmux_cmd=""
+  case "$kind" in
+    duel)  tmux_obj="duel-$name"; tmux_cmd=kill-session;;
+    spawn) tmux_obj="ensemble:$name"; tmux_cmd=kill-window;;
+  esac
+  if [ -n "$tmux_obj" ] && tmux has-session -t "${tmux_obj%%:*}" 2>/dev/null; then
+    roots="$(tmux list-panes -t "$tmux_obj" -F '#{pane_pid}' 2>/dev/null | tr '\n' ' ')"
+  fi
+  case "$kind" in
+    dispatch|delegate) roots="$roots $(pgrep -f "/dispatch/$name\." 2>/dev/null | tr '\n' ' ')";;
+    review)            roots="$roots $(pgrep -f "/review/$name/" 2>/dev/null | tr '\n' ' ')";;
+    duel|spawn)        [ -z "${roots// }" ] && roots="$(pgrep -f "$rundir/" 2>/dev/null | tr '\n' ' ')";;
+  esac
+
+  # expand to full process trees, drop ourselves/our ancestors
+  local pids="" r anc=" " p=$$
+  while [ "${p:-1}" -gt 1 ] 2>/dev/null; do anc="$anc$p "; p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null); done
+  for r in $roots; do pids="$pids $(_descendants "$r" 2>/dev/null | tr '\n' ' ')"; done
+  pids="$(echo $pids | tr ' ' '\n' | awk 'NF' | sort -un | tr '\n' ' ')"
+  local keep="" k; for k in $pids; do case "$anc" in *" $k "*) ;; *) keep="$keep $k";; esac; done; pids="$keep"
+
+  if [ -z "${pids// }" ] && { [ -z "$tmux_obj" ] || ! tmux has-session -t "${tmux_obj%%:*}" 2>/dev/null; }; then
+    echo "[stop] '$name' ($kind) has no live process — nothing to stop."; return 0
+  fi
+
+  if [ "$yes" != 1 ]; then
+    local a=""
+    if [ -t 0 ] && [ -t 1 ]; then printf "Stop run '%s' (%s)? [y/N] " "$name" "$kind" >&2; read -r a || a=""
+    elif [ -r /dev/tty ]; then printf "Stop run '%s' (%s)? [y/N] " "$name" "$kind" >&2; read -r a 2>/dev/null </dev/tty || a=""
+    else echo "[stop] no terminal to confirm — re-run with --yes."; return 1; fi
+    case "$a" in y|Y|yes) ;; *) echo "[stop] aborted — '$name' still running."; return 1;; esac
+  fi
+
+  local surv=""
+  for k in $pids; do kill "$k" 2>/dev/null; done   # SIGTERM the tree (lets the agent flush)
+  sleep 2
+  for k in $pids; do kill -0 "$k" 2>/dev/null && { kill -9 "$k" 2>/dev/null; surv="$surv $k"; }; done
+  case "$tmux_cmd" in
+    kill-session) tmux kill-session -t "$tmux_obj" 2>/dev/null;;
+    kill-window)  tmux kill-window  -t "$tmux_obj" 2>/dev/null;;
+  esac
+  # mark the run done so `jobs`/`dash` stop showing it as running
+  local df
+  case "$kind" in
+    spawn)             df="$rundir/run.done";  [ -f "$df" ] || echo stopped >"$df";;
+    duel)              for df in "$rundir/claude.done" "$rundir/codex.done"; do [ -f "$df" ] || echo stopped >"$df"; done;;
+    dispatch|delegate) df="${logf%.log}.done"; [ -f "$df" ] || echo stopped >"$df";;
+  esac
+  echo "[stop] stopped '$name' ($kind).${surv:+  force-killed:$surv}"
 }
 
 cmd_watch() {
@@ -764,6 +866,7 @@ case "$sub" in
   tail)                cmd_tail "$@";;
   ps|top)              cmd_ps "$@";;
   reap)                cmd_reap "$@";;
+  stop)                cmd_stop "$@";;
   report)              cmd_report "$@";;
   watch)               cmd_watch "$@";;
   dash|tui|dashboard)  cmd_dash "$@";;
@@ -791,8 +894,11 @@ ensemble — Claude + Codex together (tmux-visible)
   ps                   live process/RAM view of running codex/claude agents (+ system)
   report [--md]        performance snapshot (reviews, findings, success rate); --md = committable doc
   reap [--dry-run] [--idle-cpu N] [--older-than H] [--no-servers] [--yes]
-       reclaim RAM: list idle agent sessions + dev servers, then close on y/N confirm
-       (never closes the session you run it from; --dry-run just lists)
+       reclaim RAM: list idle agent sessions + dev servers (numbered); type the
+       numbers to KEEP alive, then confirm closing the rest (--dry-run just lists;
+       --yes closes all without prompting; never closes the session you run from)
+  stop <NAME> [--yes]  gracefully stop ONE run (SIGTERM→SIGKILL its tree, then tear
+       down its tmux window/session); this is the `x` action in `dash`
   attach [NAME] | status | clean <NAME|--all> | doctor | install-review-hook [--global]
 USAGE
      exit 1;;

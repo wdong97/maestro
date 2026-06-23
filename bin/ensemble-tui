@@ -4,11 +4,13 @@
 Stdlib only (curses), so it runs anywhere python3 exists. Launched by
 `ensemble dash`, which sets ENSEMBLE_BIN to the ensemble CLI path.
 
-Keys:  j/k or arrows = move   a = attach/follow   x = kill   / = filter
-       r = refresh now        enter = follow output   q = quit
+Read-only watching, plus one guarded action: `x` stops the selected run after a
+y/N confirm. Keystrokes never reach a live agent — there is no interactive attach.
+Keys:  j/k or arrows = move   a/enter = follow output (read-only)   x = stop run
+       p = toggle resources/output   / = filter   r = refresh   q = quit
 Auto-refreshes every ~1.5s; the bottom pane live-previews the selected run's log.
 """
-import curses, os, subprocess, time
+import curses, os, re, subprocess, time
 
 ENSEMBLE = os.environ.get("ENSEMBLE_BIN", "ensemble")
 REFRESH_MS = 1500
@@ -74,16 +76,41 @@ def get_jobs():
 
 def tail(path, n):
     try:
-        with open(path, "r", errors="replace") as f:
+        # newline="\n": don't split on lone "\r" so clean_line can collapse
+        # carriage-return progress redraws into their final frame.
+        with open(path, "r", errors="replace", newline="\n") as f:
             return f.readlines()[-n:]
     except Exception:
         return ["(no output yet)"]
 
 
-def tmux_target(job):
-    if job["kind"] == "duel":  return f"duel-{job['name']}"
-    if job["kind"] == "spawn": return "ensemble"
-    return None
+# Agent logs are raw terminal streams: ANSI colour codes, OSC titles, and `\r`
+# progress redraws that curses can't interpret and would dump as garbage.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def clean_line(s):
+    s = s.rstrip("\n").rstrip("\r")
+    if "\r" in s:                       # in-place progress redraw: keep the last frame
+        s = s.split("\r")[-1]
+    s = _ANSI.sub("", s)
+    s = s.replace("\t", "    ")
+    s = _CTRL.sub("", s)
+    return s.rstrip()
+
+
+def prep_output(path, n):
+    """Last n display-ready lines: stripped of terminal codes, blank runs collapsed."""
+    out = []
+    for x in tail(path, n * 3 + 10):
+        ln = clean_line(x)
+        if ln == "" and (not out or out[-1] == ""):
+            continue                    # collapse consecutive blanks
+        out.append(ln)
+    while out and out[0] == "":         # trim leading blank
+        out.pop(0)
+    return out[-n:] if n > 0 else []
 
 
 def run_fullscreen(cmd):
@@ -146,12 +173,25 @@ def draw(scr, jobs, sel, filt, msg):
                    f"{a['cpu']:>4.0f}% {a['nprocs']:>5}p {a['kind']:<7} {a['proj']}")
             _add(scr, r, 0, row, att); r += 1
     else:
-        _add(scr, py, 0, ("── output " + "─" * w), curses.A_DIM)
         if jobs:
-            for k, ln in enumerate(tail(jobs[sel]["log"], avail)):
-                _add(scr, py + 1 + k, 0, "  " + ln.rstrip("\n"))
+            j = jobs[sel]
+            running = j["status"].startswith("running")
+            tag = "live" if running else "done"
+            hdr = f"── output · {j['kind']}/{j['name']} · {tag} "
+            hattr = (curses.color_pair(4) | curses.A_BOLD) if running else curses.A_DIM
+        else:
+            hdr, hattr = "── output ", curses.A_DIM
+        _add(scr, py, 0, hdr + "─" * w, hattr)
+        if jobs:
+            lines = prep_output(j["log"], avail)
+            last = max((i for i, ln in enumerate(lines) if ln), default=-1)
+            for k, ln in enumerate(lines):
+                att = curses.A_BOLD if (running and k == last) else curses.A_NORMAL
+                _add(scr, py + 1 + k, 0, "  " + ln, att)
+            if not lines:
+                _add(scr, py + 1, 0, "  (no output yet)", curses.A_DIM)
 
-    keys = "j/k move · a attach · x kill · p " + ("output" if PANE == "res" else "resources") + " · / filter · r refresh · q quit"
+    keys = "j/k move · a follow · x stop · p " + ("output" if PANE == "res" else "resources") + " · / filter · r refresh · q quit"
     foot = msg if msg else keys
     _add(scr, h - 1, 0, (" " + foot).ljust(w), curses.A_REVERSE)
     scr.refresh()
@@ -203,22 +243,21 @@ def main(scr):
         elif c == ord("/"): filt = prompt(scr, "filter:")
         elif c in (ord("a"), ord("\n"), curses.KEY_ENTER, 10, 13):
             if shown:
-                j = shown[sel]; tgt = tmux_target(j)
-                if tgt and subprocess.run(["tmux", "has-session", "-t", tgt],
-                                          capture_output=True).returncode == 0:
-                    run_fullscreen(f"tmux attach -t {tgt}")
-                else:
-                    run_fullscreen(f"{ENSEMBLE} tail {j['name']}")
+                # read-only: follow the run's log (tail -f). Never attach to the live
+                # tmux session, so keystrokes can't reach — or disrupt — the agent.
+                run_fullscreen(f"{ENSEMBLE} tail {shown[sel]['name']}")
                 scr.timeout(REFRESH_MS); jobs = get_jobs()
         elif c == ord("x"):
+            # the one write action: stop the selected run, behind a y/N confirm.
             if shown:
-                j = shown[sel]; tgt = tmux_target(j)
-                if tgt and subprocess.run(["tmux", "kill-session", "-t", tgt],
-                                          capture_output=True).returncode == 0:
-                    msg = f"killed {tgt}"
+                j = shown[sel]
+                if prompt(scr, f"stop {j['kind']} '{j['name']}'? [y/N]")[:1].lower() == "y":
+                    subprocess.run([ENSEMBLE, "stop", "--yes", j["name"]],
+                                   capture_output=True)
+                    msg = f"stopped {j['name']}"
+                    jobs = get_jobs()
                 else:
-                    msg = "no tmux session to kill for this run"
-                jobs = get_jobs()
+                    msg = "stop cancelled"
 
 
 if __name__ == "__main__":
