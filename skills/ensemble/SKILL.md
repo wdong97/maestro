@@ -123,6 +123,7 @@ scripts/ensemble.sh tail <name>    # follow a run's output live (or `last` for t
 scripts/ensemble.sh watch          # plain-text auto-refreshing list (no interactivity)
 scripts/ensemble.sh ps [--by rss]  # task-manager: per-process agents sorted by CPU/RAM + project
 scripts/ensemble.sh ps --stints    # per open SESSION: RAM % of total (whole process tree summed)
+scripts/ensemble.sh reap [--dry-run]  # reclaim RAM: list idle sessions + dev servers, close on y/N confirm
 scripts/ensemble.sh report [--md]  # performance snapshot: reviews, findings, success rate, tokens
 ```
 

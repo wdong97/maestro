@@ -627,6 +627,96 @@ cmd_ps() {
   [ "$any" = 0 ] && echo "  (no live codex/claude agent processes)"
 }
 
+_age_h() { local s="${1:-0}"; if [ "$s" -lt 3600 ]; then echo "$((s/60))m"; elif [ "$s" -lt 86400 ]; then echo "$((s/3600))h"; else echo "$((s/86400))d"; fi; }
+
+# Per root agent session: rootpid \t kind \t tree-cpu% \t root-age-secs \t pidlist
+_reap_sessions() {
+  ps -eo pid=,ppid=,pcpu=,etimes=,comm=,args= 2>/dev/null | awk '
+    { pid=$1; CPU[pid]=$3; ET[pid]=$4; CH[$2]=CH[$2]" "pid; PAR[pid]=$2; l=tolower($0);
+      AG[pid]=((($5=="codex"||$5=="claude")||l~/codex exec|codex resume|claude -p/) \
+        && l !~ /ensemble\.sh|ensemble-tui|status\.py|maestro\/bin|awk| -eo /)?1:0;
+      K[pid]=(l~/codex/)?"codex":((l~/claude/)?"claude":"agent") }
+    function tree(p,o,i,a,n){ o=p; n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") o=o" "tree(a[i]); return o }
+    function csum(p,s,i,a,n){ s=CPU[p]+0; n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") s+=csum(a[i]); return s }
+    END { for(p in AG) if(AG[p] && !AG[PAR[p]]) printf "%s\t%s\t%.1f\t%s\t%s\n", p, K[p], csum(p), ET[p], tree(p) }'
+}
+
+# Dev servers worth reclaiming: real server processes over a RAM floor (skips the
+# tiny bash/npm/sh wrappers whose args merely mention vite/webpack).
+_reap_servers() {
+  local minmb="${ENSEMBLE_REAP_SRV_MIN_MB:-100}"
+  ps -eo pid=,rss=,comm=,args= 2>/dev/null | awk -v MIN="$minmb" '
+    { l=tolower($0); name=$3; mb=$2/1024 }
+    mb >= MIN \
+      && name !~ /^(bash|sh|npm|pnpm|yarn|make|python|python3|awk|node)$/ \
+      && ( name ~ /^(next-server|vite|webpack|nodemon)$/ || l ~ /next-server|vite|webpack-dev-server|webpack serve/ ) \
+      && l !~ / -eo |ensemble|maestro\/bin/ { printf "%s\t%s\t%s\n", $1, $2, name }'
+}
+
+# Reclaim RAM: list idle agent sessions + dev servers, then close on confirm.
+# Default: list everything and ask y/N. --dry-run lists only; --yes skips the prompt.
+cmd_reap() {
+  local idlecpu="${ENSEMBLE_REAP_IDLE_CPU:-1}" olderh="${ENSEMBLE_REAP_OLDER_H:-4}" servers=1 yes=0 dry=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --idle-cpu) idlecpu="$2"; shift;; --older-than) olderh="$2"; shift;;
+    --no-servers) servers=0;; --yes) yes=1;; --dry-run) dry=1;;
+    *) die "unknown reap flag $1 (try: --idle-cpu N --older-than H --no-servers --dry-run --yes)";;
+  esac; shift; done
+  local olders=$((olderh*3600))
+  # never reap the session running this command: collect our ancestor pids
+  local anc=" " p=$$
+  while [ "${p:-1}" -gt 1 ] 2>/dev/null; do anc="$anc$p "; p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null); done
+
+  local kill_pids="" total_mb=0 nsess=0 nsrv=0
+  local sess_out="" srv_out="" rootpid kind cpu age pids x files rkb mb proj np
+
+  while IFS="$(printf '\t')" read -r rootpid kind cpu age pids; do
+    case "$anc" in *" $rootpid "*) continue;; esac                 # skip self/ancestors
+    awk "BEGIN{exit !($cpu < $idlecpu && $age >= $olders)}" || continue   # idle AND old
+    files=""; for x in $pids; do files="$files /proc/$x/smaps_rollup"; done
+    rkb=$(awk '/^Pss:/{s+=$2} END{print s+0}' $files 2>/dev/null); mb=$((rkb/1024))
+    proj=$(basename "$(readlink "/proc/$rootpid/cwd" 2>/dev/null || echo '?')")
+    np=$(set -- $pids; echo $#)
+    sess_out="$sess_out$(printf '  %6sM  %-5s  %-7s %-24s %sp' "$mb" "$(_age_h "$age")" "$kind" "$proj" "$np")"$'\n'
+    kill_pids="$kill_pids $pids"; total_mb=$((total_mb+mb)); nsess=$((nsess+1))
+  done < <(_reap_sessions)
+
+  if [ "$servers" = 1 ]; then
+    while IFS="$(printf '\t')" read -r spid srss sname; do
+      case "$anc" in *" $spid "*) continue;; esac
+      mb=$((srss/1024)); proj=$(basename "$(readlink "/proc/$spid/cwd" 2>/dev/null || echo '?')")
+      srv_out="$srv_out$(printf '  %6sM  %-14s %s' "$mb" "$sname" "$proj")"$'\n'
+      kill_pids="$kill_pids $spid"; total_mb=$((total_mb+mb)); nsrv=$((nsrv+1))
+    done < <(_reap_servers)
+  fi
+
+  echo "ensemble reap — would close these (idle agent sessions: cpu<${idlecpu}%, idle >${olderh}h)"
+  echo
+  echo "Idle agent sessions ($nsess):"
+  [ -n "$sess_out" ] && printf '%s' "$sess_out" || echo "  (none)"
+  echo
+  echo "Dev servers ($nsrv):"
+  if [ "$servers" = 1 ]; then [ -n "$srv_out" ] && printf '%s' "$srv_out" || echo "  (none)"; else echo "  (skipped: --no-servers)"; fi
+  echo
+  echo "TOTAL: $((nsess+nsrv)) items, ~${total_mb} MB reclaimable."
+
+  [ $((nsess+nsrv)) -eq 0 ] && { echo "[reap] nothing to close."; return 0; }
+  if [ "$dry" = 1 ]; then echo "[reap] dry run — nothing closed. Re-run without --dry-run to confirm + close."; return 0; fi
+  if [ "$yes" != 1 ]; then
+    if [ -e /dev/tty ]; then
+      printf '\nClose all of the above? [y/N] ' >&2; read -r a </dev/tty
+      case "$a" in y|Y|yes) ;; *) echo "[reap] aborted — nothing closed."; return 1;; esac
+    else
+      echo "[reap] non-interactive — re-run with --yes to close, or --dry-run to just list."; return 1
+    fi
+  fi
+  local k surv
+  for k in $kill_pids; do kill "$k" 2>/dev/null; done
+  sleep 2
+  surv=""; for k in $kill_pids; do kill -0 "$k" 2>/dev/null && { kill -9 "$k" 2>/dev/null; surv="$surv $k"; }; done
+  echo "[reap] closed $((nsess+nsrv)) items (~${total_mb} MB).${surv:+  force-killed:$surv}"
+}
+
 cmd_watch() {
   local interval="${1:-2}"
   while true; do
@@ -666,6 +756,7 @@ case "$sub" in
   jobs)                cmd_jobs "$@";;
   tail)                cmd_tail "$@";;
   ps|top)              cmd_ps "$@";;
+  reap)                cmd_reap "$@";;
   report)              cmd_report "$@";;
   watch)               cmd_watch "$@";;
   dash|tui|dashboard)  cmd_dash "$@";;
@@ -692,6 +783,9 @@ ensemble — Claude + Codex together (tmux-visible)
   dash                 interactive TUI dashboard (select/attach/kill/filter); watch = plain text
   ps                   live process/RAM view of running codex/claude agents (+ system)
   report [--md]        performance snapshot (reviews, findings, success rate); --md = committable doc
+  reap [--dry-run] [--idle-cpu N] [--older-than H] [--no-servers] [--yes]
+       reclaim RAM: list idle agent sessions + dev servers, then close on y/N confirm
+       (never closes the session you run it from; --dry-run just lists)
   attach [NAME] | status | clean <NAME|--all> | doctor | install-review-hook [--global]
 USAGE
      exit 1;;
