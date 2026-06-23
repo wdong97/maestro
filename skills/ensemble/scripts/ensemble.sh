@@ -544,28 +544,34 @@ _ps_rows() {
   done | sort -t"$(printf '\t')" -k"$([ "$by" = rss ] && echo 2 || echo 1)" -rn
 }
 
-# Emit one row per open agent SESSION (a root agent process + its whole subtree):
-#   ram%_of_total \t rssMB \t cpu% \t nprocs \t kind \t project
-# RSS is summed across the tree (shared pages may double-count — a rough gauge).
+# Emit one row per open agent SESSION (root agent process + its whole subtree):
+#   ram%_of_total \t ramMB \t cpu% \t nprocs \t kind \t project
+# RAM is summed PSS (proportional set size) across the tree — shared pages are
+# split across sharers, so no double-counting (accurate). Falls back to RSS sum
+# only if smaps_rollup is unreadable.
 _ps_stints() {
   local by="${1:-rss}" memtotal
-  memtotal=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null)
+  memtotal=$(awk '/MemTotal/{print $2; exit}' /proc/meminfo 2>/dev/null)
   [ -n "$memtotal" ] || memtotal=$(free 2>/dev/null | awk '/Mem:/{print $2}')
   ps -eo pid=,ppid=,pcpu=,rss=,comm=,args= 2>/dev/null | awk '
     { pid=$1; RSS[pid]=$4; CPU[pid]=$3; CH[$2]=CH[$2]" "pid; PAR[pid]=$2; l=tolower($0);
       AG[pid]=((($5=="codex"||$5=="claude") || l~/codex exec|codex resume|claude -p/) \
         && l !~ /ensemble\.sh|ensemble-tui|status\.py|maestro\/bin|awk| -eo /) ? 1 : 0;
       K[pid]=(l~/codex/)?"codex":((l~/claude/)?"claude":"agent") }
+    function tree(p,  o,i,a,n){ o=p; n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") o=o" "tree(a[i]); return o }
     function rsum(p,  s,i,a,n){ s=RSS[p]+0; n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") s+=rsum(a[i]); return s }
     function csum(p,  s,i,a,n){ s=CPU[p]+0; n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") s+=csum(a[i]); return s }
-    function pcnt(p,  s,i,a,n){ s=1;        n=split(CH[p],a," "); for(i=1;i<=n;i++) if(a[i]!="") s+=pcnt(a[i]); return s }
     END { for(p in AG) if(AG[p] && !AG[PAR[p]])
-            printf "%s\t%d\t%.1f\t%d\t%s\n", p, rsum(p), csum(p), pcnt(p), K[p] }' | \
-  while IFS="$(printf '\t')" read -r pid rsskb cpu n kind; do
-    cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null)
+            printf "%s\t%s\t%.1f\t%d\t%s\n", p, K[p], csum(p), rsum(p), tree(p) }' | \
+  while IFS="$(printf '\t')" read -r rootpid kind cpu rsskb pids; do
+    files=""; for p in $pids; do files="$files /proc/$p/smaps_rollup"; done
+    ramkb=$(awk '/^Pss:/{s+=$2} END{print s+0}' $files 2>/dev/null)
+    [ "${ramkb:-0}" -gt 0 ] 2>/dev/null || ramkb="$rsskb"      # RSS fallback if PSS unreadable
+    n=$(set -- $pids; echo $#)
+    cwd=$(readlink "/proc/$rootpid/cwd" 2>/dev/null)
     printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$(awk -v r="$rsskb" -v t="$memtotal" 'BEGIN{printf "%.1f", t?r/t*100:0}')" \
-      "$((rsskb/1024))" "$cpu" "$n" "$kind" "$(basename "${cwd:-?}")"
+      "$(awk -v r="$ramkb" -v t="$memtotal" 'BEGIN{printf "%.2f", t?r/t*100:0}')" \
+      "$((ramkb/1024))" "$cpu" "$n" "$kind" "$(basename "${cwd:-?}")"
   done | sort -t"$(printf '\t')" -k"$([ "$by" = cpu ] && echo 3 || echo 1)" -rn
 }
 
@@ -583,7 +589,7 @@ cmd_ps() {
       _ps_stints "$sby" | sed 's/^/T\t/'
       return
     fi
-    echo "== open agent sessions (stints) — RAM = whole process tree, % of total =="
+    echo "== open agent sessions — RAM = PSS (accurate, shared-page split) summed over the tree, % of total =="
     printf "  %5s %7s %5s %6s %-8s %s\n" "RAM%" "RAM" "CPU%" "PROCS" "AGENT" "PROJECT"
     local any=0 pct rssmb cpu n kind proj
     while IFS="$(printf '\t')" read -r pct rssmb cpu n kind proj; do
