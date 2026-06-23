@@ -6,14 +6,14 @@ the peer-review gate *flagged before code shipped*; some are stylistic or false
 positives. The value is that they surfaced pre-merge, not after.
 
 ## Peer-review gate
-- Reviews run: **63**
-- Findings raised: **51**  (P1: 8 · P2: 39 · P3: 4)
+- Reviews run: **64**
+- Findings raised: **55**  (P0: 1 · P1: 8 · P2: 42 · P3: 4)
 
 ## Delegation reliability
 - Delegations completed: **14**, succeeded (exit 0): **14**  (**100%**)
 
 ## Activity
-- Duels: 1 · spawns: 19 · ~2849746 Codex tokens across logged runs
+- Duels: 1 · spawns: 19 · ~5396355 Codex tokens across logged runs
 
 _Method: derived from per-run artifacts (exit codes, saved review outputs) under
 `~/.ensemble`. Quality lift (solo vs ensemble) is not inferred here — that needs the

@@ -473,18 +473,23 @@ cmd_report() {
   n_review=$(ls -d "$R"/review/*/ 2>/dev/null | wc -l | tr -d ' ')
   n_duel=$(ls -d "$R"/duel/*/ 2>/dev/null | wc -l | tr -d ' ')
   n_spawn=$(ls -d "$R"/spawn/*/ 2>/dev/null | wc -l | tr -d ' ')
+  local p0
+  p0=$(grep -rhoE '\[P0\]' "$R"/review/*/*.out 2>/dev/null | wc -l | tr -d ' ')
   p1=$(grep -rhoE '\[P1\]' "$R"/review/*/*.out 2>/dev/null | wc -l | tr -d ' ')
   p2=$(grep -rhoE '\[P2\]' "$R"/review/*/*.out 2>/dev/null | wc -l | tr -d ' ')
   p3=$(grep -rhoE '\[P3\]' "$R"/review/*/*.out 2>/dev/null | wc -l | tr -d ' ')
-  findings=$((p1+p2+p3))
+  findings=$((p0+p1+p2+p3))
   ok=0; tot=0
   for f in "$R"/dispatch/*.done "$CD"/*.done; do [ -f "$f" ] || continue; tot=$((tot+1)); [ "$(cat "$f" 2>/dev/null)" = 0 ] && ok=$((ok+1)); done
   pct=0; [ "$tot" -gt 0 ] && pct=$((ok*100/tot))
+  # Sum the Codex token total from every codex-bearing log (dispatch, review, spawn,
+  # duel). Match only a standalone "tokens used" line + the number on the next line
+  # (codex's summary format), so prose/diffs that mention the phrase don't inflate it.
   toks=0
-  for f in "$R"/dispatch/*.log "$CD"/*.log "$R"/review/*/codex.log; do
+  for f in "$R"/dispatch/*.log "$CD"/*.log "$R"/review/*/codex.log "$R"/spawn/*/run.log "$R"/duel/*/codex.log; do
     [ -f "$f" ] || continue
-    nn=$(grep -A1 -i 'tokens used' "$f" 2>/dev/null | grep -oE '[0-9][0-9,]*' | tail -1 | tr -d ',')
-    [ -n "$nn" ] && toks=$((toks+nn))
+    nn=$(awk 'p ~ /^[ \t]*tokens used[ \t]*$/ {g=$0; gsub(/[^0-9]/,"",g); if(g!="") last=g} {p=$0} END{print last+0}' "$f")
+    [ -n "$nn" ] && [ "$nn" -gt 0 ] && toks=$((toks+nn))
   done
   local today; today=$(date +%Y-%m-%d)
   if [ "$md" = 1 ]; then
@@ -498,7 +503,7 @@ positives. The value is that they surfaced pre-merge, not after.
 
 ## Peer-review gate
 - Reviews run: **$n_review**
-- Findings raised: **$findings**  (P1: $p1 · P2: $p2 · P3: $p3)
+- Findings raised: **$findings**  (P0: $p0 · P1: $p1 · P2: $p2 · P3: $p3)
 
 ## Delegation reliability
 - Delegations completed: **$tot**, succeeded (exit 0): **$ok**  (**${pct}%**)
@@ -512,7 +517,7 @@ optional judge benchmark._
 MD
   else
     echo "maestro — performance ($today)   [from ~/.ensemble logged runs]"
-    echo "  peer-review:  $n_review reviews → $findings findings raised (P1:$p1 P2:$p2 P3:$p3)"
+    echo "  peer-review:  $n_review reviews → $findings findings raised (P0:$p0 P1:$p1 P2:$p2 P3:$p3)"
     echo "  delegation:   $ok/$tot succeeded (${pct}%)"
     echo "  activity:     $n_duel duels · $n_spawn spawns · ~$toks codex tokens logged"
     echo "  note: 'raised' = flagged pre-merge, not all confirmed. commit a snapshot: ensemble report --md > PERFORMANCE.md"
