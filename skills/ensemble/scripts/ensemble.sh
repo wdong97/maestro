@@ -666,16 +666,33 @@ _reap_servers() {
 # Interactive: each item is numbered; you type the numbers to KEEP alive, then
 # confirm closing the rest. --dry-run lists only; --yes skips both prompts.
 cmd_reap() {
-  local idlecpu="${ENSEMBLE_REAP_IDLE_CPU:-1}" olderh="${ENSEMBLE_REAP_OLDER_H:-4}" servers=1 yes=0 dry=0
+  local idlecpu="${ENSEMBLE_REAP_IDLE_CPU:-1}" olderh="${ENSEMBLE_REAP_OLDER_H:-4}" servers=1 yes=0 dry=0 porc=0 closepids=""
   while [ $# -gt 0 ]; do case "$1" in
     --idle-cpu) idlecpu="$2"; shift;; --older-than) olderh="$2"; shift;;
     --no-servers) servers=0;; --yes) yes=1;; --dry-run) dry=1;;
-    *) die "unknown reap flag $1 (try: --idle-cpu N --older-than H --no-servers --dry-run --yes)";;
+    --porcelain) porc=1;; --close-pids) closepids="$2"; shift;;
+    *) die "unknown reap flag $1 (try: --idle-cpu N --older-than H --no-servers --dry-run --yes --porcelain --close-pids P..)";;
   esac; shift; done
   local olders=$((olderh*3600))
   # never reap the session running this command: collect our ancestor pids
   local anc=" " p=$$
   while [ "${p:-1}" -gt 1 ] 2>/dev/null; do anc="$anc$p "; p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null); done
+
+  # --close-pids "P,..": graceful-kill exactly these pids (the browser keep-selection
+  # in `ensemble web` posts the close-set here). Digit-validated; skips our ancestors.
+  if [ -n "$closepids" ]; then
+    local k surv="" kills=""
+    for k in ${closepids//,/ }; do
+      case "$k" in *[!0-9]*) continue;; esac
+      case "$anc" in *" $k "*) ;; *) kills="$kills $k";; esac
+    done
+    [ -z "${kills// }" ] && { echo "[reap] no valid pids to close."; return 0; }
+    for k in $kills; do kill "$k" 2>/dev/null; done
+    sleep 2
+    for k in $kills; do kill -0 "$k" 2>/dev/null && { kill -9 "$k" 2>/dev/null; surv="$surv $k"; }; done
+    echo "[reap] closed pids:$kills${surv:+  force-killed:$surv}"
+    return 0
+  fi
 
   # one entry per reapable item (sessions first, then servers); the index is what
   # the user types to keep an item alive. it_pids[i]=pids  it_mb[i]=MB  it_line[i]=row
@@ -703,6 +720,14 @@ cmd_reap() {
     done < <(_reap_servers)
   fi
   local nsrv=$((n-nsess))
+
+  # --porcelain: machine-readable candidates for `ensemble web` —
+  # one TSV line per item:  comma-joined-pids \t MB \t session|server \t label
+  if [ "$porc" = 1 ]; then
+    for x in $(seq 1 "$nsess"); do printf '%s\t%s\tsession\t%s\n' "${it_pids[x]// /,}" "${it_mb[x]}" "$(echo ${it_line[x]})"; done
+    for x in $(seq $((nsess+1)) "$n"); do printf '%s\t%s\tserver\t%s\n' "${it_pids[x]// /,}" "${it_mb[x]}" "$(echo ${it_line[x]})"; done
+    return 0
+  fi
 
   echo "ensemble reap — idle agent sessions (cpu<${idlecpu}%, idle >${olderh}h) + dev servers"
   echo
@@ -862,6 +887,18 @@ cmd_dash() {
   else echo "[ensemble] dashboard needs python3 + $tui — falling back to text watch"; cmd_watch "$@"; fi
 }
 
+# Browser dashboard: token-gated HTTP server (watch + stop/reap). 127.0.0.1 by
+# default; pass --lan to bind 0.0.0.0 (WSL -> Windows). [port] defaults to 8770.
+cmd_web() {
+  local self repo web
+  self="$(_realpath "${BASH_SOURCE[0]}")"
+  repo="$(cd "$(dirname "$self")/../../.." && pwd)"
+  web="$repo/bin/ensemble-web"
+  have python3 || die "ensemble web needs python3"
+  [ -f "$web" ] || die "missing $web (run install.sh?)"
+  ENSEMBLE_BIN="$self" exec python3 "$web" "$@"
+}
+
 sub="${1:-}"; shift || true
 case "$sub" in
   duel)                cmd_duel "$@";;
@@ -877,6 +914,7 @@ case "$sub" in
   report)              cmd_report "$@";;
   watch)               cmd_watch "$@";;
   dash|tui|dashboard)  cmd_dash "$@";;
+  web)                 cmd_web "$@";;
   status)              cmd_status "$@";;
   clean)               cmd_clean "$@";;
   doctor)              cmd_doctor "$@";;
@@ -897,7 +935,8 @@ ensemble — Claude + Codex together (tmux-visible)
        peer-review a diff (default reviewer: codex).
   jobs                 list every run (duel/spawn/review/dispatch) + status, from anywhere
   tail <NAME|last>     follow a run's output live (works even if launched elsewhere)
-  dash                 interactive TUI dashboard (select/attach/kill/filter); watch = plain text
+  dash                 interactive TUI dashboard (lanes: needs-you/running/idle; watch = plain text)
+  web [port] [--lan]   browser dashboard (watch + stop/reap, token-gated); --lan binds 0.0.0.0 (WSL)
   ps                   live process/RAM view of running codex/claude agents (+ system)
   report [--md]        performance snapshot (reviews, findings, success rate); --md = committable doc
   reap [--dry-run] [--idle-cpu N] [--older-than H] [--no-servers] [--yes]

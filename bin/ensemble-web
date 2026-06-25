@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""maestro web — interactive browser dashboard over `ensemble`. Stdlib only.
+
+Launched by `ensemble web`, which sets ENSEMBLE_BIN to the ensemble CLI path.
+
+Security: every /api/* call requires the session token printed at startup
+(?t=… or X-Token header). Binds 127.0.0.1 by default; pass --lan to bind
+0.0.0.0 for a browser on another host (WSL → Windows) — the token still
+gates all data and actions. Read endpoints: /api/state, /api/log. Write
+endpoints (token + confirmed in the UI): /api/stop, /api/reap.
+"""
+import http.server, json, os, re, secrets, socket, subprocess, sys
+from urllib.parse import urlparse, parse_qs
+
+ENSEMBLE = os.environ.get("ENSEMBLE_BIN", "ensemble")
+TOKEN = secrets.token_urlsafe(18)
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _clean(s):
+    s = s.rstrip("\n").rstrip("\r")
+    if "\r" in s:
+        s = s.split("\r")[-1]
+    return _CTRL.sub("", _ANSI.sub("", s).replace("\t", "    ")).rstrip()
+
+
+def _run(args, timeout=12):
+    try:
+        return subprocess.run([ENSEMBLE, *args], capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ""
+
+
+def get_jobs():
+    jobs = []
+    for line in _run(["jobs", "--porcelain"]).splitlines():
+        p = line.split("\t")
+        if len(p) >= 5:
+            jobs.append(dict(kind=p[0], name=p[1], status=p[2], age=int(p[3] or 0), log=p[4]))
+    return jobs
+
+
+def get_state():
+    sysd, agents = {}, []
+    for line in _run(["ps", "--stints", "--porcelain"]).splitlines():
+        p = line.split("\t")
+        if p[0] == "SYS" and len(p) >= 6:
+            sysd = dict(rampct=float(p[1] or 0), used=p[2], total=p[3],
+                        swappct=float(p[4] or 0), load=p[5])
+        elif p[0] == "T" and len(p) >= 7:
+            agents.append(dict(pct=float(p[1] or 0), rss=int(p[2] or 0), cpu=float(p[3] or 0),
+                               nprocs=p[4], kind=p[5], proj=p[6]))
+    reap = []
+    for line in _run(["reap", "--porcelain"]).splitlines():
+        p = line.split("\t")
+        if len(p) >= 4:
+            reap.append(dict(pids=p[0], mb=int(p[1] or 0), kind=p[2], label=p[3].strip()))
+    return dict(sys=sysd, agents=agents, jobs=get_jobs(), reap=reap)
+
+
+def get_log(name, n=240):
+    for j in get_jobs():
+        if j["name"] == name:
+            try:
+                with open(j["log"], "r", errors="replace", newline="\n") as f:
+                    return [_clean(x) for x in f.readlines()[-n:]]
+            except Exception:
+                return ["(no output yet)"]
+    return ["(unknown run)"]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):           # quiet
+        pass
+
+    def _ok_token(self):
+        q = parse_qs(urlparse(self.path).query)
+        tok = (q.get("t", [None])[0]) or self.headers.get("X-Token")
+        return secrets.compare_digest(str(tok or ""), TOKEN)
+
+    def _send(self, obj, code=200, ctype="application/json"):
+        body = obj if isinstance(obj, bytes) else json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        if path == "/":
+            return self._send(PAGE.encode(), ctype="text/html; charset=utf-8")
+        if not self._ok_token():
+            return self._send({"error": "forbidden"}, 403)
+        if path == "/api/state":
+            return self._send(get_state())
+        if path == "/api/log":
+            name = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+            return self._send({"lines": get_log(name)})
+        self._send({"error": "not found"}, 404)
+
+    def do_POST(self):
+        if not self._ok_token():
+            return self._send({"error": "forbidden"}, 403)
+        path = urlparse(self.path).path
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            return self._send({"error": "bad body"}, 400)
+        if path == "/api/stop":
+            name = str(body.get("name", "")).strip()
+            if not name:
+                return self._send({"error": "name required"}, 400)
+            _run(["stop", "--yes", name], timeout=30)
+            return self._send({"ok": True})
+        if path == "/api/reap":
+            pids = str(body.get("pids", "")).replace(",", " ").strip()
+            if not pids or not re.fullmatch(r"[0-9 ]+", pids):
+                return self._send({"error": "bad pids"}, 400)
+            _run(["reap", "--close-pids", pids, "--yes"], timeout=40)
+            return self._send({"ok": True})
+        self._send({"error": "not found"}, 404)
+
+
+def main():
+    port, bind, lan = 8770, "127.0.0.1", False
+    for a in sys.argv[1:]:
+        if a in ("--lan", "-l"):
+            lan, bind = True, "0.0.0.0"
+        elif a.isdigit():
+            port = int(a)
+    host = "127.0.0.1"
+    if lan:
+        try:
+            host = subprocess.run(["hostname", "-I"], capture_output=True, text=True).stdout.split()[0]
+        except Exception:
+            host = socket.gethostname()
+    try:
+        srv = http.server.ThreadingHTTPServer((bind, port), Handler)
+    except OSError as e:
+        print(f"[ensemble web] can't bind {bind}:{port} — {e} (try another port: ensemble web 8780)", file=sys.stderr)
+        sys.exit(1)
+    url = f"http://{host}:{port}/?t={TOKEN}"
+    print(f"[ensemble web] open  {url}")
+    if lan:
+        print("[ensemble web] bound 0.0.0.0 (LAN-reachable); the token gates all data + actions.")
+    else:
+        print("[ensemble web] localhost-only. Browser on another host (WSL → Windows)? re-run: ensemble web --lan")
+    print("[ensemble web] Ctrl-C to stop.")
+    sys.stdout.flush()   # show the URL+token immediately even when piped/redirected
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+PAGE = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>maestro</title>
+<style>
+:root{--bg:#0e1116;--panel:#161b22;--line:#222a35;--mut:#8b949e;--fg:#e6edf3;
+--green:#3fb950;--red:#f85149;--cyan:#39c5cf;--amber:#d29922;--accent:#388bfd}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
+font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+header{position:sticky;top:0;background:#0e1116ee;backdrop-filter:blur(6px);
+border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:18px;align-items:center}
+header .b{font-weight:700;letter-spacing:.3px}.mut{color:var(--mut)}
+.gauge{display:inline-block;width:90px;height:8px;border-radius:6px;background:#22272e;overflow:hidden;vertical-align:middle}
+.gauge>i{display:block;height:100%;background:var(--accent)}
+main{max-width:1000px;margin:0 auto;padding:16px}
+.lane{margin:18px 0 8px;font-weight:700;letter-spacing:.4px;color:var(--mut);
+border-bottom:1px solid var(--line);padding-bottom:4px}
+.lane b{color:var(--fg)}.empty{color:var(--mut);padding:6px 4px;font-style:italic}
+.run{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);
+border-radius:9px;background:var(--panel);margin:7px 0;cursor:pointer}
+.run:hover{border-color:#30394680}.run.dim{opacity:.55}
+.dot{font-size:12px}.kind{color:var(--mut);width:74px}.name{flex:1;font-weight:600;
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.act{color:var(--mut);width:96px}
+.age{color:var(--mut);width:54px;text-align:right}
+.btn{border:1px solid var(--line);background:#1c2330;color:var(--fg);border-radius:7px;
+padding:4px 10px;cursor:pointer;font:inherit}.btn:hover{border-color:var(--accent)}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+.out{background:#0b0e13;border:1px solid var(--line);border-radius:9px;margin:-2px 0 8px;
+padding:10px 12px;max-height:300px;overflow:auto;white-space:pre-wrap;color:#c9d1d9;font-size:13px}
+.rows{margin-top:6px}.rcand{display:flex;align-items:center;gap:10px;padding:6px 8px}
+.rcand label{flex:1;color:#c9d1d9}.bar{height:7px;border-radius:5px;background:#22272e;width:120px;overflow:hidden}
+.bar>i{display:block;height:100%}.sys{display:flex;gap:18px;flex-wrap:wrap;color:var(--mut);font-size:13px;margin-top:4px}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1c2330;
+border:1px solid var(--line);border-radius:8px;padding:8px 14px;opacity:0;transition:.2s}
+.toast.show{opacity:1}.err{color:var(--amber)}
+</style></head><body>
+<header><span class=b>maestro</span><span id=summary class=mut>connecting…</span>
+<span class=mut style=margin-left:auto>ram</span><span class=gauge><i id=rambar></i></span>
+<span id=rampct class=mut></span></header>
+<main>
+ <div id=needs></div><div id=running></div>
+ <details id=reapwrap style="margin:22px 0"><summary style="cursor:pointer;color:var(--mut)">IDLE / RECLAIMABLE — keep what you want, close the rest</summary>
+   <div id=reap class=rows></div>
+   <button class="btn danger" id=reapbtn style="margin:8px 2px">Close selected</button>
+ </details>
+ <details><summary style=cursor:pointer;color:var(--mut)>DONE (older / handled)</summary><div id=done></div></details>
+ <div id=agents class=sys></div>
+</main>
+<div id=toast class=toast></div>
+<script>
+const T=new URLSearchParams(location.search).get('t')||'';
+const acked=new Set(), open=new Set();
+const NEEDS=1800, FAILW=14400;
+const $=id=>document.getElementById(id);
+function toast(m,err){const t=$('toast');t.textContent=m;t.className='toast show'+(err?' err':'');
+  clearTimeout(toast._t);toast._t=setTimeout(()=>t.className='toast',2200);}
+async function api(path,opt){const u=path+(path.includes('?')?'&':'?')+'t='+encodeURIComponent(T);
+  const r=await fetch(u,opt);if(r.status===403){toast('forbidden — open the URL with its ?t= token',1);throw 0;}return r;}
+function state(j){const s=j.status;if(s.startsWith('running'))return'running';
+  if(s.toLowerCase().includes('stopped'))return'stopped';
+  const c=(s.match(/-?\d+/g)||[]).map(Number);return(c.length&&c.some(x=>x!==0))?'failed':'done';}
+function lane(j){const st=state(j);if(st==='running')return'running';
+  if(acked.has(j.name))return'done';return j.age<((st==='failed'||st==='stopped')?FAILW:NEEDS)?'needs':'done';}
+const BADGE={running:['●','var(--cyan)'],done:['✓','var(--green)'],failed:['✗','var(--red)'],stopped:['■','var(--amber)']};
+function action(j,st){if(st==='done'&&j.kind==='duel')return'synthesize';
+  if(st==='done'&&j.kind==='review')return'read review';return{running:'live',done:'done',failed:'failed',stopped:'stopped'}[st];}
+function hms(s){s|=0;return s<60?s+'s':s<3600?(s/60|0)+'m':(s/3600|0)+'h'+((s%3600)/60|0)+'m';}
+function runEl(j,dim){const st=state(j),[ch,col]=BADGE[st];
+  const d=document.createElement('div');d.className='run'+(dim?' dim':'');
+  d.innerHTML=`<span class=dot style=color:${col}>${ch}</span><span class=kind>${j.kind}</span>`+
+    `<span class=name>${j.name}</span><span class=act>${action(j,st)}</span><span class=age>${hms(j.age)}</span>`;
+  const stopBtn=st==='running'?`<button class="btn danger" data-stop="${j.name}">stop</button>`:'';
+  const t=document.createElement('span');t.innerHTML=stopBtn;if(stopBtn)d.appendChild(t.firstChild);
+  d.onclick=e=>{if(e.target.dataset.stop)return;acked.add(j.name);
+    if(open.has(j.name))open.delete(j.name);else open.add(j.name);render(LAST);};
+  return d;}
+function laneInto(el,title,arr,dim){el.innerHTML='';const h=document.createElement('div');
+  h.className='lane';h.innerHTML=`<b>${title}</b> (${arr.length})`;el.appendChild(h);
+  if(!arr.length){const e=document.createElement('div');e.className='empty';
+    e.textContent=title==='NEEDS YOU'?"nothing fresh — you're caught up":'nothing running';el.appendChild(e);}
+  arr.forEach(j=>{el.appendChild(runEl(j,dim));
+    if(open.has(j.name)){const o=document.createElement('div');o.className='out';o.textContent='loading…';
+      el.appendChild(o);api('/api/log?name='+encodeURIComponent(j.name)).then(r=>r.json())
+        .then(d=>{o.textContent=(d.lines||[]).join('\n')||'(no output yet)';o.scrollTop=o.scrollHeight;}).catch(()=>{});}});}
+let LAST={jobs:[],sys:{},agents:[],reap:[]};
+function render(s){LAST=s;const jobs=s.jobs||[];
+  const running=jobs.filter(j=>state(j)==='running');
+  const needs=jobs.filter(j=>lane(j)==='needs');
+  const done=jobs.filter(j=>lane(j)==='done').slice(0,12);
+  laneInto($('needs'),'NEEDS YOU',needs,false);
+  laneInto($('running'),'RUNNING',running,false);
+  laneInto($('done'),'DONE',done,true);
+  const sys=s.sys||{},rp=Math.round(sys.rampct||0);
+  $('summary').textContent=`${needs.length+running.length} active · ${(s.agents||[]).length} sessions · cpu ${Math.round((s.agents||[]).reduce((a,b)=>a+b.cpu,0))}% · ram ${rp}%`;
+  $('rambar').style.width=rp+'%';$('rambar').style.background=rp>=85?'var(--red)':rp>=60?'var(--amber)':'var(--green)';
+  $('rampct').textContent=rp+'%'+(sys.used?`  ${sys.used}/${sys.total}G`:'');
+  const reap=s.reap||[];$('reapbtn').textContent=`Close selected (${reap.length})`;
+  $('reap').innerHTML=reap.length?'':'<div class=empty>nothing idle to reclaim</div>';
+  reap.forEach((c,i)=>{const row=document.createElement('div');row.className='rcand';
+    row.innerHTML=`<input type=checkbox checked data-pids="${c.pids}"><label>${c.label}</label>`+
+      `<span class=mut>${c.mb}M</span>`;$('reap').appendChild(row);});
+  $('agents').innerHTML=(s.agents||[]).map(a=>`<span>${a.kind} ${a.proj} · ${a.rss}M · cpu ${Math.round(a.cpu)}%</span>`).join('');}
+document.addEventListener('click',async e=>{
+  const name=e.target.dataset.stop;
+  if(name){e.stopPropagation();if(!confirm('Stop run "'+name+'"?'))return;
+    acked.add(name);await api('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    toast('stopping '+name);refresh();}
+  if(e.target.id==='reapbtn'){const pids=[...document.querySelectorAll('#reap input:checked')].map(c=>c.dataset.pids).join(' ').trim();
+    if(!pids){toast('nothing selected to close');return;}
+    if(!confirm('Close the checked items? (unchecked stay alive)'))return;
+    await api('/api/reap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pids})});
+    toast('reclaiming…');refresh();}});
+async function refresh(){try{const s=await(await api('/api/state')).json();render(s);}catch(e){}}
+refresh();setInterval(refresh,2000);
+</script></body></html>"""
+
+
+if __name__ == "__main__":
+    main()
