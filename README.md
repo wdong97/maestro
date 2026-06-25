@@ -66,10 +66,12 @@ ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted
 ensemble ps --stints          # per open session (process tree summed): RAM % of total, CPU, #procs, project
 ```
 
-The dashboard groups runs into **NEEDS YOU** (finished — synthesize/read or failed),
-**RUNNING**, and **IDLE/RECLAIMABLE**, and rings the bell when a run finishes. It's
-read-only — keystrokes never reach a live agent — with two guarded actions that both
-ask first: `x` stops the selected run, `R` reaps idle sessions.
+The dashboard groups runs into **NEEDS YOU** (just finished — recent and not yet
+opened), **RUNNING**, **DONE** (older or already-handled, dimmed), and
+**IDLE/RECLAIMABLE**, and rings the bell when a run finishes. It's read-only —
+keystrokes never reach a live agent — with two guarded actions that both ask first:
+`x` stops the selected run, `R` reaps idle sessions. (NEEDS-YOU window:
+`ENSEMBLE_DASH_RECENT_MIN`, default 30.)
 
 **Reclaim RAM — `reap` / `stop`.** Idle agents and dev servers add up. List what's
 worth closing, keep the ones you still want, and close the rest:
