@@ -61,14 +61,15 @@ review) is listed with status, from any terminal:
 ```bash
 ensemble jobs                 # one-shot list of all runs
 ensemble tail <name|last>     # follow one run's output live
-ensemble dash                 # interactive TUI (real terminal): live resource task-manager; `p` toggles run output
+ensemble dash                 # interactive TUI: runs grouped by what needs you, live resource view (`p`), `?` for help
 ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted by CPU/RAM w/ %MEM + project
 ensemble ps --stints          # per open session (process tree summed): RAM % of total, CPU, #procs, project
 ```
 
-The dashboard is read-only: you can watch any run, but keystrokes never reach a live
-agent. The one exception is `x` — it stops the selected run, and only after a y/N
-confirm.
+The dashboard groups runs into **NEEDS YOU** (finished — synthesize/read or failed),
+**RUNNING**, and **IDLE/RECLAIMABLE**, and rings the bell when a run finishes. It's
+read-only — keystrokes never reach a live agent — with two guarded actions that both
+ask first: `x` stops the selected run, `R` reaps idle sessions.
 
 **Reclaim RAM — `reap` / `stop`.** Idle agents and dev servers add up. List what's
 worth closing, keep the ones you still want, and close the rest:

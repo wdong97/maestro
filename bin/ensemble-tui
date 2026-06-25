@@ -4,11 +4,12 @@
 Stdlib only (curses), so it runs anywhere python3 exists. Launched by
 `ensemble dash`, which sets ENSEMBLE_BIN to the ensemble CLI path.
 
-Read-only watching, plus one guarded action: `x` stops the selected run after a
-y/N confirm. Keystrokes never reach a live agent — there is no interactive attach.
-Keys:  j/k or arrows = move   a/enter = follow output (read-only)   x = stop run
-       p = toggle resources/output   / = filter   r = refresh   q = quit
-Auto-refreshes every ~1.5s; the bottom pane live-previews the selected run's log.
+Read-only watching, plus two guarded actions: `x` stops the selected run and `R`
+reaps idle sessions — both ask first. Keystrokes never reach a live agent.
+Runs are grouped into attention lanes: NEEDS YOU (finished — synthesize/read or
+failed), RUNNING, and IDLE/RECLAIMABLE. A run finishing rings the bell.
+Keys:  j/k or arrows = move   a/enter = follow (read-only)   x = stop   R = reap
+       p = resources/output   / = filter   r = refresh   ? = help   q = quit
 """
 import curses, os, re, shlex, subprocess, time
 
@@ -133,28 +134,111 @@ def _add(scr, y, x, s, attr=0):
         pass
 
 
-def draw(scr, jobs, sel, filt, msg):
+# --- run classification: lane + badge + action hint ------------------------
+def job_state(j):
+    s = j["status"]
+    if s.startswith("running"): return "running"
+    if "stopped" in s.lower():  return "stopped"
+    codes = re.findall(r"-?\d+", s)
+    if codes and any(int(c) != 0 for c in codes): return "failed"
+    return "done"
+
+
+_BADGE = {"running": ("●", 4), "done": ("✓", 1), "failed": ("✗", 3), "stopped": ("■", 2)}
+
+
+def job_action(j, st):
+    if st == "done" and j["kind"] == "duel":   return "synthesize"
+    if st == "done" and j["kind"] == "review": return "read review"
+    return {"running": "live", "done": "done", "failed": "failed", "stopped": "stopped"}[st]
+
+
+def reload(prev):
+    """Refresh jobs + ps; return a one-line note for any run that just finished
+    (and mutate prev to the new statuses so the next call can diff again)."""
+    jobs = get_jobs(); sysd, agents = get_ps_data()
+    fin = [j for j in jobs if prev.get(j["name"], "").startswith("running")
+           and not j["status"].startswith("running")]
+    note = ""
+    if fin:
+        sym = "✗" if any(job_state(j) in ("failed", "stopped") for j in fin) else "✓"
+        extra = f" +{len(fin) - 1} more" if len(fin) > 1 else ""
+        note = f"{sym} {fin[0]['name']}{extra} finished"
+    prev.clear(); prev.update({j["name"]: j["status"] for j in jobs})
+    return jobs, sysd, agents, note
+
+
+def draw_help(scr):
+    """Modal help overlay; blocks until any key, then returns."""
+    h, w = scr.getmaxyx()
+    lines = [
+        "maestro dashboard — help", "",
+        "LANES",
+        "  NEEDS YOU   finished runs to synthesize, read, or that failed",
+        "  RUNNING     live agents — read-only, keystrokes never reach them",
+        "  IDLE        open sessions you can reclaim with reap", "",
+        "KEYS",
+        "  j / k / arrows   move selection",
+        "  a / enter        follow output (read-only)",
+        "  x                stop the selected run (asks first)",
+        "  R                reap idle sessions + dev servers",
+        "  p                toggle resources / output pane",
+        "  / filter    r refresh    q quit", "",
+        "press any key to close",
+    ]
+    bw = min(w - 2, max(len(l) for l in lines) + 4); bh = len(lines) + 2
+    y0, x0 = max(0, (h - bh) // 2), max(0, (w - bw) // 2)
+    for i in range(bh):
+        _add(scr, y0 + i, x0, " " * bw, curses.A_REVERSE)
+    for i, l in enumerate(lines):
+        a = curses.A_REVERSE | (curses.A_BOLD if l in ("LANES", "KEYS") or l.endswith("help") else 0)
+        _add(scr, y0 + 1 + i, x0 + 2, l, a)
+    scr.refresh()
+    scr.timeout(-1); scr.getch(); scr.timeout(REFRESH_MS)
+
+
+def draw(scr, needs, running, idle_n, sel, filt, msg):
     scr.erase()
     h, w = scr.getmaxyx()
-    ncpu = sum(a["cpu"] for a in PS_AGENTS)
-    rp = PS_SYS.get("rampct", 0)
-    sub = f"  {len(jobs)} runs  ·  {len(PS_AGENTS)} sessions  cpu {ncpu:.0f}%  ram {rp:.0f}%" + (f"  filter:'{filt}'" if filt else "")
-    _add(scr, 0, 0, ("maestro dashboard" + sub).ljust(w), curses.A_BOLD | curses.A_REVERSE)
+    selectable = needs + running
+    ncpu = sum(a["cpu"] for a in PS_AGENTS); rp = PS_SYS.get("rampct", 0)
+    sub = (f"  {len(selectable)} runs · {len(PS_AGENTS)} sessions · cpu {ncpu:.0f}% · ram {rp:.0f}%"
+           + (f"   /{filt}" if filt else ""))
+    _add(scr, 0, 0, ("  maestro" + sub).ljust(w), curses.A_BOLD | curses.A_REVERSE)
 
-    list_h = max(3, (h - 6) // 2)
-    _add(scr, 1, 0, f"  {'KIND':<8} {'NAME':<26} {'STATUS':<22} {'AGE':<5}".ljust(w), curses.A_UNDERLINE)
-    top = max(0, sel - (list_h - 1))
-    for i in range(top, min(len(jobs), top + list_h)):
-        j = jobs[i]
-        running = j["status"].startswith("running")
-        row = f"  {j['kind']:<8} {j['name'][:26]:<26} {j['status'][:22]:<22} {hms(j['age']):<5}"
-        attr = curses.A_REVERSE if i == sel else (curses.A_BOLD if running else curses.A_NORMAL)
-        _add(scr, 2 + (i - top), 0, row.ljust(w), attr)
+    # top section: attention lanes (NEEDS YOU / RUNNING / IDLE summary)
+    list_h = max(6, (h - 6) // 2)
+    rows = [("lane", f"NEEDS YOU ({len(needs)})")]
+    rows += [("job", j) for j in needs] or [("empty", "nothing waiting on you")]
+    rows.append(("lane", f"RUNNING ({len(running)})"))
+    rows += [("job", j) for j in running] or [("empty", "nothing running")]
+    rows.append(("idle", f"IDLE / RECLAIMABLE ({idle_n})    → R to reap"))
 
-    py = 2 + list_h
+    job_at = [i for i, (t, _) in enumerate(rows) if t == "job"]
+    sel_row = job_at[sel] if (job_at and 0 <= sel < len(job_at)) else 0
+    start = max(0, min(sel_row - list_h // 2, len(rows) - list_h)) if len(rows) > list_h else 0
+    y = 1
+    for i in range(start, min(len(rows), start + list_h)):
+        t, payload = rows[i]
+        if t == "lane":
+            _add(scr, y, 0, (" " + payload).ljust(w), curses.A_BOLD | curses.A_UNDERLINE)
+        elif t in ("empty", "idle"):
+            _add(scr, y, 0, ("   " if t == "empty" else " ") + payload, curses.A_DIM)
+        else:
+            j = payload; st = job_state(j); bch, bcol = _BADGE[st]
+            text = (f"  {bch} {j['kind'][:8]:<8} {j['name'][:25]:<25} "
+                    f"{job_action(j, st)[:12]:<12} {hms(j['age']):>4}")
+            if job_at and sel < len(job_at) and i == job_at[sel]:
+                _add(scr, y, 0, text.ljust(w), curses.A_REVERSE)
+            else:
+                _add(scr, y, 0, text.ljust(w), curses.A_BOLD if st == "running" else curses.A_NORMAL)
+                _add(scr, y, 2, bch, curses.color_pair(bcol) | curses.A_BOLD)
+        y += 1
+
+    py = 1 + list_h
     avail = h - py - 3
     if PANE == "res":
-        _add(scr, py, 0, ("── open sessions — RAM % of total, tree summed (press p for run output) " + "─" * w), curses.A_DIM)
+        _add(scr, py, 0, ("── open sessions — RAM % of total, tree summed (p for run output) " + "─" * w), curses.A_DIM)
         r = py + 1
         s = PS_SYS
         if s:
@@ -173,27 +257,25 @@ def draw(scr, jobs, sel, filt, msg):
                    f"{a['cpu']:>4.0f}% {a['nprocs']:>5}p {a['kind']:<7} {a['proj']}")
             _add(scr, r, 0, row, att); r += 1
     else:
-        if jobs:
-            j = jobs[sel]
-            running = j["status"].startswith("running")
-            tag = "live" if running else "done"
-            hdr = f"── output · {j['kind']}/{j['name']} · {tag} "
-            hattr = (curses.color_pair(4) | curses.A_BOLD) if running else curses.A_DIM
+        j = selectable[sel] if (selectable and sel < len(selectable)) else None
+        if j:
+            run = j["status"].startswith("running")
+            hdr = f"── output · {j['kind']}/{j['name']} · {'live' if run else 'done'} "
+            hattr = (curses.color_pair(4) | curses.A_BOLD) if run else curses.A_DIM
         else:
             hdr, hattr = "── output ", curses.A_DIM
         _add(scr, py, 0, hdr + "─" * w, hattr)
-        if jobs:
+        if j:
             lines = prep_output(j["log"], avail)
             last = max((i for i, ln in enumerate(lines) if ln), default=-1)
             for k, ln in enumerate(lines):
-                att = curses.A_BOLD if (running and k == last) else curses.A_NORMAL
+                att = curses.A_BOLD if (run and k == last) else curses.A_NORMAL
                 _add(scr, py + 1 + k, 0, "  " + ln, att)
             if not lines:
                 _add(scr, py + 1, 0, "  (no output yet)", curses.A_DIM)
 
-    keys = "j/k move · a follow · x stop · p " + ("output" if PANE == "res" else "resources") + " · / filter · r refresh · q quit"
-    foot = msg if msg else keys
-    _add(scr, h - 1, 0, (" " + foot).ljust(w), curses.A_REVERSE)
+    keys = "j/k move · a follow · x stop · R reap · p panes · / filter · ? help · q quit"
+    _add(scr, h - 1, 0, (" " + (msg or keys)).ljust(w), curses.A_REVERSE)
     scr.refresh()
 
 
@@ -219,45 +301,55 @@ def main(scr):
     except curses.error:
         pass
     sel, filt, msg = 0, "", ""
-    jobs = get_jobs(); PS_SYS, PS_AGENTS = get_ps_data()
+    prev = {}
+    jobs, PS_SYS, PS_AGENTS, _ = reload(prev)   # seeds prev; first load never beeps
     last = time.time()
     while True:
         shown = [j for j in jobs if filt.lower() in j["name"].lower()] if filt else jobs
-        sel = max(0, min(sel, len(shown) - 1)) if shown else 0
-        draw(scr, shown, sel, filt, msg)
+        needs = [j for j in shown if not j["status"].startswith("running")]
+        running = [j for j in shown if j["status"].startswith("running")]
+        selectable = needs + running
+        sel = max(0, min(sel, len(selectable) - 1)) if selectable else 0
+        idle_n = sum(1 for a in PS_AGENTS if a["cpu"] < 1.0)
+        draw(scr, needs, running, idle_n, sel, filt, msg)
         msg = ""
         c = scr.getch()
         if c == -1:
             if time.time() - last > REFRESH_MS / 1000:
-                jobs = get_jobs(); PS_SYS, PS_AGENTS = get_ps_data()
+                jobs, PS_SYS, PS_AGENTS, note = reload(prev)
+                if note: curses.beep(); msg = note
                 last = time.time()
             continue
-        if c in (ord("q"),): break
+        if c == ord("q"): break
         elif c in (curses.KEY_DOWN, ord("j")): sel += 1
         elif c in (curses.KEY_UP, ord("k")): sel -= 1
-        elif c == ord("p"):
-            PANE = "log" if PANE == "res" else "res"
-        elif c in (ord("r"),):
-            jobs = get_jobs(); PS_SYS, PS_AGENTS = get_ps_data()
+        elif c == ord("p"): PANE = "log" if PANE == "res" else "res"
+        elif c == ord("?"): draw_help(scr)
+        elif c == ord("r"):
+            jobs, PS_SYS, PS_AGENTS, note = reload(prev)
+            if note: curses.beep(); msg = note
             last = time.time()
         elif c == ord("/"): filt = prompt(scr, "filter:")
+        elif c == ord("R"):
+            # reap is interactive (its own keep/confirm); drop out of curses for it.
+            run_fullscreen(f"{shlex.quote(ENSEMBLE)} reap")
+            scr.timeout(REFRESH_MS); jobs, PS_SYS, PS_AGENTS, _ = reload(prev); last = time.time()
         elif c in (ord("a"), ord("\n"), curses.KEY_ENTER, 10, 13):
-            if shown:
+            if selectable:
                 # read-only: follow the run's log (tail -f). Never attach to the live
                 # tmux session, so keystrokes can't reach — or disrupt — the agent.
                 # shlex.quote the name: it comes from `jobs` (a --name can hold shell
                 # metachars), and run_fullscreen runs it through os.system.
-                run_fullscreen(f"{shlex.quote(ENSEMBLE)} tail {shlex.quote(shown[sel]['name'])}")
-                scr.timeout(REFRESH_MS); jobs = get_jobs()
+                run_fullscreen(f"{shlex.quote(ENSEMBLE)} tail {shlex.quote(selectable[sel]['name'])}")
+                scr.timeout(REFRESH_MS); jobs, PS_SYS, PS_AGENTS, _ = reload(prev); last = time.time()
         elif c == ord("x"):
-            # the one write action: stop the selected run, behind a y/N confirm.
-            if shown:
-                j = shown[sel]
+            # the one in-pane write action: stop the selected run, behind a y/N confirm.
+            if selectable:
+                j = selectable[sel]
                 if prompt(scr, f"stop {j['kind']} '{j['name']}'? [y/N]")[:1].lower() == "y":
-                    subprocess.run([ENSEMBLE, "stop", "--yes", j["name"]],
-                                   capture_output=True)
+                    subprocess.run([ENSEMBLE, "stop", "--yes", j["name"]], capture_output=True)
                     msg = f"stopped {j['name']}"
-                    jobs = get_jobs()
+                    jobs, PS_SYS, PS_AGENTS, _ = reload(prev)
                 else:
                     msg = "stop cancelled"
 
