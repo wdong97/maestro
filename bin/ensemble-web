@@ -281,6 +281,27 @@ border:1px solid var(--line);border-radius:8px;padding:8px 14px;opacity:0;transi
 .ktitle{font-size:13px;margin:3px 0;line-height:1.35;color:var(--fg)}
 .kfoot{font-size:11px;color:var(--mut)}.knote{font-size:11px;color:var(--red);margin-top:5px;border-top:1px solid var(--line);padding-top:5px}
 .tbar{margin:6px 2px}.tbar .btn{font-size:12px;padding:3px 9px}
+.tdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.phead{display:flex;align-items:center;gap:10px;margin:12px 2px 2px}
+.phead .pname{font-weight:700}.phead .ppct{margin-left:auto;color:var(--mut);font-size:13px}
+.pipe{display:flex;gap:3px;margin:9px 2px}.seg{flex:1;height:8px;border-radius:3px;background:#22272e}
+.subnav{display:flex;gap:2px;margin:11px 2px}
+.subnav button{font:inherit;font-size:12px;background:transparent;border:0;border-bottom:2px solid transparent;color:var(--mut);padding:3px 11px;cursor:pointer}
+.subnav button:hover{color:var(--fg)}.subnav button.on{color:var(--fg)}
+.slice{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
+.shead{display:flex;align-items:center;gap:10px}.shead .sid{font-weight:700}.shead .stitle{flex:1;font-size:14px}
+.sbadge{font-size:9.5px;font-weight:700;text-transform:uppercase;padding:2px 8px;border-radius:10px}
+.b-todo{color:var(--mut);background:#22272e}.b-in-progress{color:#9cd2ff;background:rgba(56,139,253,.16)}
+.b-blocked{color:#ffa198;background:rgba(248,81,73,.16)}.b-in-review{color:#e3b341;background:rgba(210,153,34,.16)}.b-done{color:#56d364;background:rgba(63,185,80,.16)}
+.sprog{height:6px;background:#22272e;border-radius:4px;margin:9px 0;overflow:hidden}.sprog>i{display:block;height:100%;background:var(--green)}
+.task{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:4px 2px;color:var(--fg)}
+.task .ti{flex:1}.task .tid{color:var(--mut);font-size:11px}.task .who{color:#9cd2ff;font-size:11px}
+.gates{display:flex;gap:24px;flex-wrap:wrap;margin-top:10px}
+.glbl{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:5px}
+.gck{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);padding:2px 0}.gdot{width:7px;height:7px;border-radius:2px;flex:none}
+.g-pending{background:var(--mut)}.g-pass{background:var(--green)}.g-fail{background:var(--red)}
+.signoff{margin-top:10px;font-size:12px;color:var(--mut)}.signoff.ok{color:var(--green)}.signoff.ready{color:var(--amber)}
+.ledger{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}.lv{font-size:11px;background:#0b0e13;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--mut)}.lv b{color:var(--fg)}
 </style></head><body>
 <header><span class=b>maestro</span><nav id=tabs class=tabs></nav><span id=summary class=mut></span>
 <span class=mut style="margin-left:auto">ram</span><span class=gauge><i id=rambar></i></span>
@@ -368,28 +389,63 @@ async function refreshRuns(){try{const s=await(await api('/api/state')).json();r
 function esc(x){return(x==null?'':(''+x)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function kago(iso){if(!iso)return'';const t=new Date(iso).getTime();if(isNaN(t))return'';return hms(Math.max(0,(Date.now()-t)/1000))+' ago';}
 const KST=[['todo','To do'],['in-progress','In progress'],['blocked','Blocked'],['in-review','In review'],['done','Done']];
-async function refreshBoard(id){let d;try{d=await(await api('/api/board?id='+id)).json();}catch(e){return;}
-  const el=$('board');if(!d||d.error){el.innerHTML='<div class=empty style="padding:20px">board unreadable</div>';return;}
-  const tasks=[];(d.slices||[]).forEach(sl=>(sl.tasks||[]).forEach(t=>tasks.push(Object.assign({sid:sl.id},t))));
-  let h='<div class=kmeta>'+esc(d.project||'board')+' · '+tasks.length+' tasks · updated '+esc(kago(d.updated_at))+'</div><div class=kboard>';
+const LBL={todo:'todo','in-progress':'in progress',blocked:'blocked','in-review':'in review',done:'done'};
+const PAL=['#3fb0ff','#a371f7','#3fb950','#d29922','#39c5cf','#f778ba','#ff7b72','#8b949e'];
+const pcol=id=>PAL[((+id)||0)%PAL.length];
+function pctOf(d){const ts=[];(d.slices||[]).forEach(s=>(s.tasks||[]).forEach(t=>ts.push(t)));
+  const done=ts.filter(t=>t.status==='done').length;return ts.length?Math.round(done/ts.length*100):0;}
+function kanbanHTML(d){const tasks=[];(d.slices||[]).forEach(sl=>(sl.tasks||[]).forEach(t=>tasks.push(Object.assign({sid:sl.id},t))));
+  let h='<div class=kboard>';
   KST.forEach(([k,lbl])=>{const cards=tasks.filter(t=>t.status===k);
     h+='<div class=kcol><h4><span class="kdot s-'+k+'"></span>'+lbl+' <em>'+cards.length+'</em></h4>';
     if(!cards.length)h+='<div class=empty style="padding:4px 2px">—</div>';
-    cards.forEach(c=>{h+='<div class="kcard'+(k==='blocked'?' blk':'')+(k==='done'?' dn':'')+'">'+
-      '<div class=ktag>'+esc(c.sid)+'</div><div class=ktitle>'+esc(c.title)+'</div>'+
-      '<div class=kfoot>'+(c.owner?'@'+esc(c.owner):'unassigned')+' · '+esc(kago(c.updated_at))+'</div>'+
-      (c.note&&k==='blocked'?'<div class=knote>'+esc(c.note)+'</div>':'')+'</div>';});
+    cards.forEach(c=>{h+='<div class="kcard'+(k==='blocked'?' blk':'')+(k==='done'?' dn':'')+'"><div class=ktag>'+esc(c.sid)+
+      '</div><div class=ktitle>'+esc(c.title)+'</div><div class=kfoot>'+(c.owner?'@'+esc(c.owner):'unassigned')+
+      ' · '+esc(kago(c.updated_at))+'</div>'+(c.note&&k==='blocked'?'<div class=knote>'+esc(c.note)+'</div>':'')+'</div>';});
     h+='</div>';});
-  el.innerHTML=h+'</div>';}
-let TAB='runs';
-function refresh(){TAB==='runs'?refreshRuns():refreshBoard(TAB);}
+  return h+'</div>';}
+function roadmapHTML(d,c){let b='';(d.slices||[]).forEach(sl=>{const ts=sl.tasks||[],done=ts.filter(t=>t.status==='done').length,p=ts.length?Math.round(done/ts.length*100):0;
+  b+='<div class=slice><div class=shead><span class=sid style="color:'+c+'">'+esc(sl.id)+'</span><span class=stitle>'+esc(sl.title)+
+     '</span><span class="sbadge b-'+sl.status+'">'+(LBL[sl.status]||sl.status)+'</span></div><div class=sprog><i style="width:'+p+'%"></i></div>';
+  ts.forEach(t=>{b+='<div class=task><span class="kdot s-'+t.status+'"></span><span class=ti>'+esc(t.title)+'</span><span class=tid>'+
+     esc(t.id)+' · '+(LBL[t.status]||t.status)+'</span>'+(t.owner?'<span class=who>@'+esc(t.owner)+'</span>':'')+'</div>';});
+  if(!ts.length)b+='<div class=empty style="padding:3px 2px">no cards yet</div>';
+  const gq=(sl.gate&&sl.gate.quality)||[],gp=(sl.gate&&sl.gate.performance)||[];
+  if(gq.length||gp.length){b+='<div class=gates>';[['quality',gq],['performance',gp]].forEach(g=>{if(!g[1].length)return;
+    const pass=g[1].filter(x=>x.status==='pass').length;b+='<div><div class=glbl>'+g[0]+' gate · '+pass+'/'+g[1].length+'</div>'+
+      g[1].map(x=>'<div class=gck><span class="gdot g-'+x.status+'"></span>'+esc(x.check)+'</div>').join('')+'</div>';});b+='</div>';}
+  const all=gq.concat(gp);
+  if(all.length){if(sl.sign_off)b+='<div class="signoff ok">✓ signed off — @'+esc(sl.sign_off.by)+' · '+esc(kago(sl.sign_off.at))+'</div>';
+    else{const g=all.filter(x=>x.status==='pass').length,ready=g===all.length;
+      b+='<div class="signoff'+(ready?' ready':'')+'">'+(ready?'gate green — awaiting sign-off':'awaiting gate ('+g+'/'+all.length+') + sign-off')+'</div>';}}
+  const led=sl.ledger||{},lk=Object.keys(led).filter(k=>led[k]!=null);
+  if(lk.length)b+='<div class=ledger>'+lk.map(k=>'<span class=lv>'+esc(k)+' <b>'+esc(led[k])+'</b></span>').join('')+'</div>';
+  b+='</div>';});
+  return b||'<div class=empty style="padding:20px">no slices yet</div>';}
+let TAB='runs',SUB='board';
+async function refreshProject(id){let d;try{d=await(await api('/api/board?id='+id)).json();}catch(e){return;}
+  const el=$('board');if(!d||d.error){el.innerHTML='<div class=empty style="padding:20px">board unreadable</div>';el.dataset.sig='';return;}
+  const sig=id+'|'+SUB+'|'+(d.updated_at||'')+'|'+(d.slices||[]).map(s=>s.status+(s.tasks||[]).map(t=>t.status).join('')).join('|');
+  if(el.dataset.sig===sig)return;el.dataset.sig=sig;
+  const c=pcol(id),P=pctOf(d);
+  const pipe=(d.slices||[]).map(s=>'<span class="seg s-'+s.status+'" title="'+esc(s.id)+': '+esc(s.title)+' ('+esc(s.status)+')"></span>').join('');
+  el.innerHTML='<div class=phead><span class=tdot style="background:'+c+'"></span><span class=pname>'+esc(d.project||'board')+
+    '</span><span class=ppct>'+P+'% done · updated '+esc(kago(d.updated_at))+'</span></div><div class=pipe>'+pipe+'</div>'+
+    '<div class=subnav><button data-sub=board class="'+(SUB==='board'?'on':'')+'" style="border-color:'+(SUB==='board'?c:'transparent')+'">Board</button>'+
+    '<button data-sub=roadmap class="'+(SUB==='roadmap'?'on':'')+'" style="border-color:'+(SUB==='roadmap'?c:'transparent')+'">Roadmap</button></div>'+
+    '<div id=pview>'+(SUB==='roadmap'?roadmapHTML(d,c):kanbanHTML(d))+'</div>';}
+function refresh(){TAB==='runs'?refreshRuns():refreshProject(TAB);}
 async function loadTabs(){let boards=[];try{boards=await(await api('/api/boards')).json();}catch(e){}
   const t=$('tabs'),sig=['runs',...boards.map(b=>b.id)].join(',');
   if(t.dataset.sig===sig&&t.children.length)return;t.dataset.sig=sig;t.innerHTML='';
   const mk=(id,label)=>{const b=document.createElement('button');b.className='tab'+((''+TAB)===(''+id)?' on':'');
-    b.textContent=label;b.onclick=()=>{TAB=id;[...t.children].forEach(c=>c.classList.remove('on'));b.classList.add('on');
+    b.innerHTML=(id==='runs'?'':'<span class=tdot style="background:'+pcol(id)+'"></span>')+esc(label);
+    if(id!=='runs'&&(''+TAB)===(''+id))b.style.borderColor=pcol(id);
+    b.onclick=()=>{TAB=id;SUB='board';$('board').dataset.sig='';[...t.children].forEach(x=>{x.classList.remove('on');x.style.borderColor='';});
+      b.classList.add('on');if(id!=='runs')b.style.borderColor=pcol(id);
       $('runs').hidden=(id!=='runs');$('board').hidden=(id==='runs');refresh();};t.appendChild(b);};
   mk('runs','Runs');boards.forEach(b=>mk(b.id,b.name));}
+$('board').addEventListener('click',e=>{const b=e.target.closest('[data-sub]');if(b){SUB=b.dataset.sub;$('board').dataset.sig='';refreshProject(TAB);}});
 $('reap').addEventListener('change',e=>{const i=e.target;if(i.type==='checkbox'){i.checked?keptPids.delete(i.dataset.pids):keptPids.add(i.dataset.pids);}});
 $('reapall').onclick=()=>{keptPids.clear();document.querySelectorAll('#reap input').forEach(c=>c.checked=true);};
 $('reapnone').onclick=()=>document.querySelectorAll('#reap input').forEach(c=>{c.checked=false;keptPids.add(c.dataset.pids);});

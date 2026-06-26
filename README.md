@@ -70,9 +70,11 @@ ensemble ps --stints          # per open session (process tree summed): RAM % of
 `web` is the whole thing in a browser, as tabs. The **Runs** tab is the cockpit —
 NEEDS YOU / RUNNING / DONE lanes, live resource gauges, click a run to expand its
 output, **stop** buttons on live runs, and a **reclaim** panel (select all / none,
-uncheck what to keep, close the rest). Each `--board DIR` adds a **kanban tab** for
-that project (it reads `DIR/orchestration/board-state.json`); registered boards are
-remembered. Every data and action call is gated by a session token printed at
+uncheck what to keep, close the rest). Each `--board DIR` adds a color-coded
+**project tab** (it reads `DIR/orchestration/board-state.json`; registered boards are
+remembered) carrying the full orchestration project — a **Board** (kanban) and
+**Roadmap** (slices, gates, sign-off) sub-view, with a header pipeline strip showing
+where the project sits in its process. Every data and action call is gated by a token printed at
 startup; it binds `127.0.0.1` by default (`--lan` binds `0.0.0.0` for a browser on
 another host, e.g. WSL → Windows).
 
