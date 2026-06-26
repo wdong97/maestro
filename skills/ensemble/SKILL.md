@@ -118,7 +118,7 @@ so "I can't see it" is solved even after tmux/the session is gone.
 ```bash
 scripts/ensemble.sh dash           # interactive TUI (read-only): runs in lanes (needs-you/running/idle) + RAM view;
                                    #   a=follow  x=stop  R=reap  p=panes  /=filter  ?=help  q=quit  (bell on finish)
-scripts/ensemble.sh web [port]     # same cockpit in the browser (watch + stop/reap, token-gated); --lan binds 0.0.0.0
+scripts/ensemble.sh web [port] [--lan] [--board DIR]  # browser app: runs cockpit + kanban tab per --board project
 scripts/ensemble.sh jobs           # one-shot list of every run: status, age, output path
 scripts/ensemble.sh tail <name>    # follow a run's output live (or `last` for the most recent)
 scripts/ensemble.sh watch          # plain-text auto-refreshing list (no interactivity)

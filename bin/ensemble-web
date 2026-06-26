@@ -71,6 +71,57 @@ def get_log(name, n=240):
     return ["(unknown run)"]
 
 
+# --- kanban boards: a registry of per-project board-state.json files ----------
+REG = os.path.expanduser("~/.ensemble/web/boards")
+BOARDS = []   # resolved board-state.json paths; set in main()
+
+
+def resolve_board(arg):
+    """A --board arg may be a project dir, its orchestration/, or the json itself."""
+    p = os.path.expanduser(arg)
+    for c in (p, os.path.join(p, "orchestration", "board-state.json"), os.path.join(p, "board-state.json")):
+        if os.path.isfile(c):
+            return os.path.abspath(c)
+    return None
+
+
+def register_boards(args):
+    """Load the persisted registry, add any --board args, persist, return live paths."""
+    paths = []
+    if os.path.isfile(REG):
+        paths = [l.strip() for l in open(REG) if l.strip() and not l.startswith("#")]
+    for a in args:
+        jp = resolve_board(a)
+        if jp and jp not in paths:
+            paths.append(jp)
+    try:
+        os.makedirs(os.path.dirname(REG), exist_ok=True)
+        with open(REG, "w") as f:
+            f.write("\n".join(paths) + ("\n" if paths else ""))
+    except Exception:
+        pass
+    return [p for p in paths if os.path.isfile(p)]
+
+
+def boards_list():
+    out = []
+    for i, p in enumerate(BOARDS):
+        name = os.path.basename(os.path.dirname(os.path.dirname(p))) or "board"
+        try:
+            name = json.load(open(p)).get("project") or name
+        except Exception:
+            pass
+        out.append(dict(id=i, name=name))
+    return out
+
+
+def board_data(i):
+    try:
+        return json.load(open(BOARDS[i]))
+    except Exception:
+        return {"error": "unreadable board"}
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):           # quiet
         pass
@@ -99,6 +150,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/log":
             name = parse_qs(urlparse(self.path).query).get("name", [""])[0]
             return self._send({"lines": get_log(name)})
+        if path == "/api/boards":
+            return self._send(boards_list())
+        if path == "/api/board":
+            try:
+                i = int(parse_qs(urlparse(self.path).query).get("id", ["-1"])[0])
+            except ValueError:
+                i = -1
+            if 0 <= i < len(BOARDS):
+                return self._send(board_data(i))
+            return self._send({"error": "no such board"}, 404)
         self._send({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -126,12 +187,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
+    global BOARDS
     port, bind, lan = 8770, "127.0.0.1", False
-    for a in sys.argv[1:]:
+    board_args = []
+    it = iter(sys.argv[1:])
+    for a in it:
         if a in ("--lan", "-l"):
             lan, bind = True, "0.0.0.0"
+        elif a == "--board":
+            try:
+                board_args.append(next(it))
+            except StopIteration:
+                pass
         elif a.isdigit():
             port = int(a)
+    BOARDS = register_boards(board_args)
     host = "127.0.0.1"
     if lan:
         try:
@@ -145,6 +215,10 @@ def main():
         sys.exit(1)
     url = f"http://{host}:{port}/?t={TOKEN}"
     print(f"[ensemble web] open  {url}")
+    if BOARDS:
+        print(f"[ensemble web] {len(BOARDS)} board tab(s): " + ", ".join(b["name"] for b in boards_list()))
+    else:
+        print("[ensemble web] no kanban boards yet — add one: ensemble web --board <project-dir>")
     if lan:
         print("[ensemble web] bound 0.0.0.0 (LAN-reachable); the token gates all data + actions.")
     else:
@@ -190,18 +264,38 @@ padding:10px 12px;max-height:300px;overflow:auto;white-space:pre-wrap;color:#c9d
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1c2330;
 border:1px solid var(--line);border-radius:8px;padding:8px 14px;opacity:0;transition:.2s}
 .toast.show{opacity:1}.err{color:var(--amber)}
+.tabs{display:flex;gap:2px;margin-left:12px}
+.tab{font:inherit;font-size:13px;background:transparent;border:0;border-bottom:2px solid transparent;color:var(--mut);padding:4px 11px;cursor:pointer}
+.tab:hover{color:var(--fg)}.tab.on{color:var(--fg);border-color:var(--accent)}
+.kmeta{color:var(--mut);font-size:13px;margin:12px 2px}
+.kboard{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px}
+.kcol{flex:1 0 168px;min-width:168px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px}
+.kcol h4{display:flex;align-items:center;gap:7px;margin:2px 2px 9px;font-size:11px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.kcol h4 em{margin-left:auto;font-style:normal;background:#22272e;border-radius:10px;padding:0 7px;color:var(--fg)}
+.kdot{width:8px;height:8px;border-radius:50%}
+.s-todo{background:var(--mut)}.s-in-progress{background:var(--accent)}.s-blocked{background:var(--red)}.s-in-review{background:var(--amber)}.s-done{background:var(--green)}
+.kcard{background:#0b0e13;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:7px 0}
+.kcard.blk{box-shadow:inset 3px 0 0 var(--red)}.kcard.dn{opacity:.5}
+.ktag{font-size:10px;color:var(--accent);font-weight:700;letter-spacing:.3px}
+.ktitle{font-size:13px;margin:3px 0;line-height:1.35;color:var(--fg)}
+.kfoot{font-size:11px;color:var(--mut)}.knote{font-size:11px;color:var(--red);margin-top:5px;border-top:1px solid var(--line);padding-top:5px}
+.tbar{margin:6px 2px}.tbar .btn{font-size:12px;padding:3px 9px}
 </style></head><body>
-<header><span class=b>maestro</span><span id=summary class=mut>connecting…</span>
-<span class=mut style=margin-left:auto>ram</span><span class=gauge><i id=rambar></i></span>
+<header><span class=b>maestro</span><nav id=tabs class=tabs></nav><span id=summary class=mut></span>
+<span class=mut style="margin-left:auto">ram</span><span class=gauge><i id=rambar></i></span>
 <span id=rampct class=mut></span></header>
 <main>
- <div id=needs></div><div id=running></div>
- <details id=reapwrap style="margin:22px 0"><summary style="cursor:pointer;color:var(--mut)">IDLE / RECLAIMABLE — keep what you want, close the rest</summary>
-   <div id=reap class=rows></div>
-   <button class="btn danger" id=reapbtn style="margin:8px 2px">Close selected</button>
- </details>
- <details><summary style=cursor:pointer;color:var(--mut)>DONE (older / handled)</summary><div id=done></div></details>
- <div id=agents class=sys></div>
+ <section id=runs>
+   <div id=needs></div><div id=running></div>
+   <details id=reapwrap style="margin:22px 0"><summary style="cursor:pointer;color:var(--mut)">IDLE / RECLAIMABLE — keep what you want, close the rest</summary>
+     <div class=tbar><button class=btn id=reapall>select all</button> <button class=btn id=reapnone>select none</button></div>
+     <div id=reap class=rows></div>
+     <button class="btn danger" id=reapbtn style="margin:8px 2px">Close selected</button>
+   </details>
+   <details><summary style="cursor:pointer;color:var(--mut)">DONE (older / handled)</summary><div id=done></div></details>
+   <div id=agents class=sys></div>
+ </section>
+ <section id=board hidden></section>
 </main>
 <div id=toast class=toast></div>
 <script>
@@ -267,8 +361,35 @@ document.addEventListener('click',async e=>{
     if(!confirm('Close the checked items? (unchecked stay alive)'))return;
     await api('/api/reap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pids})});
     toast('reclaiming…');refresh();}});
-async function refresh(){try{const s=await(await api('/api/state')).json();render(s);}catch(e){}}
-refresh();setInterval(refresh,2000);
+async function refreshRuns(){try{const s=await(await api('/api/state')).json();render(s);}catch(e){}}
+function esc(x){return(x==null?'':(''+x)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function kago(iso){if(!iso)return'';const t=new Date(iso).getTime();if(isNaN(t))return'';return hms(Math.max(0,(Date.now()-t)/1000))+' ago';}
+const KST=[['todo','To do'],['in-progress','In progress'],['blocked','Blocked'],['in-review','In review'],['done','Done']];
+async function refreshBoard(id){let d;try{d=await(await api('/api/board?id='+id)).json();}catch(e){return;}
+  const el=$('board');if(!d||d.error){el.innerHTML='<div class=empty style="padding:20px">board unreadable</div>';return;}
+  const tasks=[];(d.slices||[]).forEach(sl=>(sl.tasks||[]).forEach(t=>tasks.push(Object.assign({sid:sl.id},t))));
+  let h='<div class=kmeta>'+esc(d.project||'board')+' · '+tasks.length+' tasks · updated '+esc(kago(d.updated_at))+'</div><div class=kboard>';
+  KST.forEach(([k,lbl])=>{const cards=tasks.filter(t=>t.status===k);
+    h+='<div class=kcol><h4><span class="kdot s-'+k+'"></span>'+lbl+' <em>'+cards.length+'</em></h4>';
+    if(!cards.length)h+='<div class=empty style="padding:4px 2px">—</div>';
+    cards.forEach(c=>{h+='<div class="kcard'+(k==='blocked'?' blk':'')+(k==='done'?' dn':'')+'">'+
+      '<div class=ktag>'+esc(c.sid)+'</div><div class=ktitle>'+esc(c.title)+'</div>'+
+      '<div class=kfoot>'+(c.owner?'@'+esc(c.owner):'unassigned')+' · '+esc(kago(c.updated_at))+'</div>'+
+      (c.note&&k==='blocked'?'<div class=knote>'+esc(c.note)+'</div>':'')+'</div>';});
+    h+='</div>';});
+  el.innerHTML=h+'</div>';}
+let TAB='runs';
+function refresh(){TAB==='runs'?refreshRuns():refreshBoard(TAB);}
+async function loadTabs(){let boards=[];try{boards=await(await api('/api/boards')).json();}catch(e){}
+  const t=$('tabs'),sig=['runs',...boards.map(b=>b.id)].join(',');
+  if(t.dataset.sig===sig&&t.children.length)return;t.dataset.sig=sig;t.innerHTML='';
+  const mk=(id,label)=>{const b=document.createElement('button');b.className='tab'+((''+TAB)===(''+id)?' on':'');
+    b.textContent=label;b.onclick=()=>{TAB=id;[...t.children].forEach(c=>c.classList.remove('on'));b.classList.add('on');
+      $('runs').hidden=(id!=='runs');$('board').hidden=(id==='runs');refresh();};t.appendChild(b);};
+  mk('runs','Runs');boards.forEach(b=>mk(b.id,b.name));}
+$('reapall').onclick=()=>document.querySelectorAll('#reap input').forEach(c=>c.checked=true);
+$('reapnone').onclick=()=>document.querySelectorAll('#reap input').forEach(c=>c.checked=false);
+loadTabs();refresh();setInterval(refresh,2000);setInterval(loadTabs,8000);
 </script></body></html>"""
 
 

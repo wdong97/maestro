@@ -62,16 +62,23 @@ review) is listed with status, from any terminal:
 ensemble jobs                 # one-shot list of all runs
 ensemble tail <name|last>     # follow one run's output live
 ensemble dash                 # interactive TUI: runs grouped by what needs you, live resource view (`p`), `?` for help
-ensemble web [port] [--lan]   # same view in the browser (watch + stop/reap, token-gated); --lan for WSL→Windows
+ensemble web [port] [--lan] [--board DIR …]   # browser app: runs + kanban tabs (watch + stop/reap, token-gated)
 ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted by CPU/RAM w/ %MEM + project
 ensemble ps --stints          # per open session (process tree summed): RAM % of total, CPU, #procs, project
 ```
 
-`web` is the same cockpit in a browser: the NEEDS YOU / RUNNING / DONE lanes, live
-resource gauges, click a run to expand its output, **stop** buttons on live runs, and
-a **reclaim** panel where you uncheck what to keep and close the rest. Every data and
-action call is gated by a session token printed at startup; it binds `127.0.0.1` by
-default (`--lan` binds `0.0.0.0` for a browser on another host, e.g. WSL → Windows).
+`web` is the whole thing in a browser, as tabs. The **Runs** tab is the cockpit —
+NEEDS YOU / RUNNING / DONE lanes, live resource gauges, click a run to expand its
+output, **stop** buttons on live runs, and a **reclaim** panel (select all / none,
+uncheck what to keep, close the rest). Each `--board DIR` adds a **kanban tab** for
+that project (it reads `DIR/orchestration/board-state.json`); registered boards are
+remembered. Every data and action call is gated by a session token printed at
+startup; it binds `127.0.0.1` by default (`--lan` binds `0.0.0.0` for a browser on
+another host, e.g. WSL → Windows).
+
+```bash
+ensemble web --lan --board ~/proj-a --board ~/proj-b   # runs cockpit + a tab per project board
+```
 
 The dashboard groups runs into **NEEDS YOU** (just finished — recent and not yet
 opened), **RUNNING**, **DONE** (older or already-handled, dimmed), and
