@@ -38,7 +38,8 @@ def get_jobs():
     for line in _run(["jobs", "--porcelain"]).splitlines():
         p = line.split("\t")
         if len(p) >= 5:
-            jobs.append(dict(kind=p[0], name=p[1], status=p[2], age=int(p[3] or 0), log=p[4]))
+            jobs.append(dict(kind=p[0], name=p[1], status=p[2], age=int(p[3] or 0), log=p[4],
+                             proj=(p[5] if len(p) > 5 else ""), title=(p[6] if len(p) > 6 else "")))
     return jobs
 
 
@@ -106,12 +107,13 @@ def register_boards(args):
 def boards_list():
     out = []
     for i, p in enumerate(BOARDS):
-        name = os.path.basename(os.path.dirname(os.path.dirname(p))) or "board"
+        pdir = os.path.basename(os.path.dirname(os.path.dirname(p))) or "board"  # the project dir name
+        name = pdir
         try:
             name = json.load(open(p)).get("project") or name
         except Exception:
             pass
-        out.append(dict(id=i, name=name))
+        out.append(dict(id=i, name=name, dir=pdir))
     return out
 
 
@@ -322,7 +324,7 @@ border:1px solid var(--line);border-radius:8px;padding:8px 14px;opacity:0;transi
 <div id=toast class=toast></div>
 <script>
 const T=new URLSearchParams(location.search).get('t')||'';
-const acked=new Set(), open=new Set(), keptPids=new Set();
+const acked=new Set(), open=new Set(), keptPids=new Set(), PROJCOL={};
 const NEEDS=1800, FAILW=14400;
 const $=id=>document.getElementById(id);
 function toast(m,err){const t=$('toast');t.textContent=m;t.className='toast show'+(err?' err':'');
@@ -340,8 +342,10 @@ function action(j,st){if(st==='done'&&j.kind==='duel')return'synthesize';
 function hms(s){s|=0;return s<60?s+'s':s<3600?(s/60|0)+'m':(s/3600|0)+'h'+((s%3600)/60|0)+'m';}
 function runEl(j,dim){const st=state(j),[ch,col]=BADGE[st];
   const d=document.createElement('div');d.className='run'+(dim?' dim':'');
-  d.innerHTML=`<span class=dot style=color:${col}>${ch}</span><span class=kind>${j.kind}</span>`+
-    `<span class=name>${j.name}</span><span class=act>${action(j,st)}</span><span class=age>${hms(j.age)}</span>`;
+  const pc=PROJCOL[j.proj]||'';                 // project color (if it's working in a tabbed project)
+  d.innerHTML=`<span class=dot style=color:${col}>${ch}</span><span class=kind style="${pc?'color:'+pc:''}">${j.kind}</span>`+
+    `<span class=name>${esc(j.title||j.name)}</span><span class=act>${action(j,st)}</span><span class=age>${hms(j.age)}</span>`;
+  if(pc)d.style.boxShadow='inset 3px 0 0 '+pc;   // left stripe in the project's color
   const stopBtn=st==='running'?`<button class="btn danger" data-stop="${j.name}">stop</button>`:'';
   const t=document.createElement('span');t.innerHTML=stopBtn;if(stopBtn)d.appendChild(t.firstChild);
   d.onclick=e=>{if(e.target.dataset.stop)return;acked.add(j.name);
@@ -436,6 +440,7 @@ async function refreshProject(id){let d;try{d=await(await api('/api/board?id='+i
     '<div id=pview>'+(SUB==='roadmap'?roadmapHTML(d,c):kanbanHTML(d))+'</div>';}
 function refresh(){TAB==='runs'?refreshRuns():refreshProject(TAB);}
 async function loadTabs(){let boards=[];try{boards=await(await api('/api/boards')).json();}catch(e){}
+  boards.forEach(b=>{if(b.dir)PROJCOL[b.dir]=pcol(b.id);});   // run rows tint to their project's color
   const t=$('tabs'),sig=['runs',...boards.map(b=>b.id)].join(',');
   if(t.dataset.sig===sig&&t.children.length)return;t.dataset.sig=sig;t.innerHTML='';
   const mk=(id,label)=>{const b=document.createElement('button');b.className='tab'+((''+TAB)===(''+id)?' on':'');

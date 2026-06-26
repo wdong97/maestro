@@ -74,6 +74,18 @@ _resolve_model() {
   esac
 }
 
+# Background, best-effort: name a run with a short LLM-generated kebab slug written
+# to "<prefix>title" (display only — the run's id stays the stable slug). Opt out
+# with ENSEMBLE_AUTONAME=0. Never blocks the launch.
+_autoname() {  # $1=meta-prefix (writes "${1}title")  $2=prompt
+  [ "${ENSEMBLE_AUTONAME:-1}" = 0 ] && return 0
+  have claude || return 0
+  ( raw=$(printf 'Name this coding task as a short lowercase kebab-case slug: 2-5 words, letters/digits/hyphens only, no explanation. Reply with ONLY the slug.\n\n%s\n' "$2" \
+        | claude -p --model claude-haiku-4-5-20251001 --output-format text 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1)
+    t=$(printf '%s' "$raw" | tr '[:upper:] _' '[:lower:]--' | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^-//; s/-*$//' | cut -c1-40)
+    [ -n "$t" ] && printf '%s' "$t" > "${1}title" ) >/dev/null 2>&1 &
+}
+
 # Run one agent in a tmux pane: stream live, tee clean answer to OUT, capture the
 # whole pane to LOG, and write the AGENT's exit code (not tee's) to DONE.
 #   $1=tmux target  $2=title  $3=agent-cmd(reads stdin)  $4=prompt
@@ -119,6 +131,7 @@ cmd_duel() {
   local root="$ROOT_DEFAULT"
   [ -z "$name" ] && name="$(slug "$prompt")-$(date +%s)"
   local dir="$BASE_DIR/duel/$name"; mkdir -p "$dir"
+  printf '%s' "$root" > "$dir/cwd"; _autoname "$dir/" "$prompt"   # project + readable title
   local sess="duel-$name" cwd_c="$root" cwd_x="$root"
 
   if [ "$mode" = rw ]; then
@@ -167,6 +180,7 @@ cmd_spawn() {
   local wd="${dir_in:-$ROOT_DEFAULT}"
   [ -z "$name" ] && name="$who-$(slug "$prompt")-$(date +%s)"
   local dir="$BASE_DIR/spawn/$name"; mkdir -p "$dir"
+  printf '%s' "$wd" > "$dir/cwd"; _autoname "$dir/" "$prompt"   # project + readable title
   local sess="ensemble"
   if tmux has-session -t "$sess" 2>/dev/null; then tmux new-window -t "$sess" -n "$name" -c "$wd"
   else new_session "$sess" "$wd"; tmux rename-window -t "$sess" "$name"; fi
@@ -202,6 +216,7 @@ cmd_delegate() {
   local dir="$BASE_DIR/dispatch"; mkdir -p "$dir"
   local log="$dir/$name.log" out="$dir/$name.out" done="$dir/$name.done" pf="$dir/$name.prompt" runner="$dir/$name.run.sh"
   rm -f "$done"; printf '%s' "$prompt" >"$pf"
+  printf '%s' "$wd" > "$dir/$name.cwd"; _autoname "$dir/$name." "$prompt"   # project + readable title
   local agent pipeline
   if [ "$fam" = claude ]; then
     agent="$(claude_cmd "$mode" "$id" "$wd")"
@@ -421,25 +436,29 @@ hms() { local s="${1:-0}"; if [ "$s" -lt 60 ]; then echo "${s}s"; elif [ "$s" -l
 _age() { local m; m=$(stat -c %Y "$1" 2>/dev/null) || { echo 0; return; }; echo $(( $(date +%s) - m )); }
 _donestat() { [ -f "$1" ] && echo "done($(tr -d '\n' <"$1"))" || echo "running"; }
 
-# Emit one TAB-separated record per run: kind  name  status  age_secs  logpath
+_meta() { [ -f "$1" ] && tr -d '\n' <"$1" 2>/dev/null; }            # echo a metadata file (or empty)
+_projof() { local c; c=$(_meta "$1"); [ -n "$c" ] && basename "$c"; } # project basename from a cwd file
+
+# Emit one TAB record per run: kind  name  status  age_secs  logpath  project  title
+# (project + title appended; older parsers that read 5 fields keep working.)
 _emit_jobs() {
   local d f name st lg
   for d in "$BASE_DIR"/duel/*/; do [ -d "$d" ] || continue; d="${d%/}"; name=$(basename "$d")
     if [ -f "$d/claude.done" ] && [ -f "$d/codex.done" ]; then
       st="done(c:$(tr -d '\n' <"$d/claude.done"),x:$(tr -d '\n' <"$d/codex.done"))"
     else st="running"; fi
-    printf 'duel\t%s\t%s\t%s\t%s\n' "$name" "$st" "$(_age "$d")" "$d/codex.log"
+    printf 'duel\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$st" "$(_age "$d")" "$d/codex.log" "$(_projof "$d/cwd")" "$(_meta "$d/title")"
   done
   for d in "$BASE_DIR"/spawn/*/; do [ -d "$d" ] || continue; d="${d%/}"; name=$(basename "$d")
-    printf 'spawn\t%s\t%s\t%s\t%s\n' "$name" "$(_donestat "$d/run.done")" "$(_age "$d")" "$d/run.log"
+    printf 'spawn\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$(_donestat "$d/run.done")" "$(_age "$d")" "$d/run.log" "$(_projof "$d/cwd")" "$(_meta "$d/title")"
   done
   for d in "$BASE_DIR"/review/*/; do [ -d "$d" ] || continue; d="${d%/}"; name=$(basename "$d")
     st="running"; { [ -s "$d/codex.out" ] || [ -s "$d/claude.out" ]; } && st="done"
     lg="$d/codex.log"; [ -f "$lg" ] || lg="$d/claude.out"
-    printf 'review\t%s\t%s\t%s\t%s\n' "$name" "$st" "$(_age "$d")" "$lg"
+    printf 'review\t%s\t%s\t%s\t%s\t\t\n' "$name" "$st" "$(_age "$d")" "$lg"
   done
   for f in "$HOME"/.codex/dispatch/*.log "$BASE_DIR"/dispatch/*.log; do [ -f "$f" ] || continue; name=$(basename "$f" .log)
-    printf 'dispatch\t%s\t%s\t%s\t%s\n' "$name" "$(_donestat "${f%.log}.done")" "$(_age "$f")" "$f"
+    printf 'dispatch\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$(_donestat "${f%.log}.done")" "$(_age "$f")" "$f" "$(_projof "${f%.log}.cwd")" "$(_meta "${f%.log}.title")"
   done
 }
 
@@ -448,8 +467,9 @@ cmd_jobs() {
   local rows; rows="$(_emit_jobs)"
   if [ -z "$rows" ]; then echo "no runs yet (nothing under ~/.ensemble or ~/.codex/dispatch)"; return; fi
   printf '%-9s %-26s %-24s %-6s %s\n' KIND NAME STATUS AGE OUTPUT
-  echo "$rows" | sort -t"$(printf '\t')" -k4,4n | while IFS="$(printf '\t')" read -r kind name st age log; do
-    printf '%-9s %-26s %-24s %-6s %s\n' "$kind" "${name:0:26}" "$st" "$(hms "$age")" "$log"
+  echo "$rows" | sort -t"$(printf '\t')" -k4,4n | while IFS="$(printf '\t')" read -r kind name st age log proj title; do
+    nm="${title:-$name}"
+    printf '%-9s %-26s %-24s %-6s %s\n' "$kind" "${nm:0:26}" "$st" "$(hms "$age")" "$log"
   done
   echo
   echo "follow a run:  ensemble tail <name|last>     live dashboard:  ensemble watch"

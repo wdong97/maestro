@@ -74,9 +74,15 @@ uncheck what to keep, close the rest). Each `--board DIR` adds a color-coded
 **project tab** (it reads `DIR/orchestration/board-state.json`; registered boards are
 remembered) carrying the full orchestration project — a **Board** (kanban) and
 **Roadmap** (slices, gates, sign-off) sub-view, with a header pipeline strip showing
-where the project sits in its process. Every data and action call is gated by a token printed at
-startup; it binds `127.0.0.1` by default (`--lan` binds `0.0.0.0` for a browser on
-another host, e.g. WSL → Windows).
+where the project sits in its process. A run working inside one of those projects is
+**tinted with that project's color** on the Runs tab, so you can see what's working
+where. Every data and action call is gated by a token printed at startup; it binds
+`127.0.0.1` by default (`--lan` binds `0.0.0.0` for a browser on another host, e.g.
+WSL → Windows).
+
+Runs also get a short, readable **auto-name** at launch — a fast `claude` (haiku) call
+turns the prompt into a slug like `auth-tokenstore-refactor` (the run's stable id is
+unchanged; this is display-only). Disable with `ENSEMBLE_AUTONAME=0`.
 
 ```bash
 ensemble web --lan --board ~/proj-a --board ~/proj-b   # runs cockpit + a tab per project board
