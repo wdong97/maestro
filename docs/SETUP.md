@@ -1,10 +1,19 @@
 # Setting up maestro
 
-This gets the Claude + Codex collaborative paradigm running on a fresh machine,
-step by step. It works the same on Linux, macOS, and WSL2. Budget ~10 minutes.
+Set up maestro on a new machine — Claude Code and Codex sharing skills, reviewing
+each other's pushes, and reporting to one dashboard. About 10 minutes.
 
-If you just want the short version, the README quickstart has it. This guide
-explains each step so you know what's happening and can fix it if something's off.
+**Platform.**
+
+| Your OS | What works |
+|---|---|
+| Linux, WSL2 | everything — maestro is developed against these |
+| macOS | everything except `ps`, `reap`, `stop`, and the RAM/CPU panes in `dash`/`web`. Those read Linux `/proc`; on macOS they print a message saying so instead of reporting nothing. |
+
+`ensemble doctor` reports which side you're on.
+
+The README quickstart is the two-command version. This guide explains each step,
+so you know what's happening and can fix it when one fails.
 
 ---
 
@@ -19,7 +28,7 @@ echo "PATH has ~/.local/bin: $(case ":$PATH:" in *":$HOME/.local/bin:"*) echo ye
 
 | Tool | What it's for | If missing |
 |---|---|---|
-| `claude` | Claude Code CLI | https://claude.com/claude-code |
+| `claude` | Claude Code CLI | [install Claude Code](https://claude.com/claude-code) |
 | `codex` | OpenAI Codex CLI | `npm i -g @openai/codex` (or your installer) |
 | `tmux` | live side-by-side agent panes | `apt install tmux` / `brew install tmux` |
 | `python3` | the dashboard TUI + build board (stdlib only) | usually preinstalled |
@@ -31,15 +40,16 @@ If `~/.local/bin` isn't on your `PATH`, add it to your shell rc and reopen the s
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
 ```
 
-Both CLIs must be signed in (`claude` once interactively; `codex` once). That's it
-for prerequisites.
+Sign in once to each CLI: run `claude` and complete its login prompt, then do the
+same for `codex`. Prerequisites are done when both start without asking you to
+authenticate.
 
 ---
 
 ## 2. Install
 
 ```bash
-git clone git@github.com:wdong97/maestro.git ~/maestro
+git clone https://github.com/wdong97/maestro.git ~/maestro
 cd ~/maestro
 ./install.sh
 ```
@@ -48,12 +58,28 @@ cd ~/maestro
 `<file>.maestro-bak`. It wires up:
 
 - **Skills** → symlinked into `~/.claude/skills/` and `~/.codex/skills/` (both agents
-  see `ensemble`, `duel`, `spawn`, `delegate-*`, `board`).
+  see `ensemble`, `duel`, `spawn`, `delegate`, `board`, `ensemble-review`,
+  `ensemble-doctor`, `plain-docs`, `eli5`, `closeout`).
 - **Slash commands** → `~/.claude/commands/` (`/duel`, `/spawn`, `/ensemble-review`,
-  `/ensemble-doctor`).
-- **CLIs** → `~/.local/bin/ensemble`, `~/.local/bin/board`, `~/.local/bin/ensemble-tui`.
+  `/ensemble-doctor`, `/plain-docs`, `/eli5`, `/closeout`).
+- **CLIs** → `~/.local/bin/`: `ensemble`, `board`, `ensemble-tui` (the `dash` TUI),
+  and `ensemble-web` (the browser dashboard).
 - **Coding guidelines** → `@import`ed into `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`.
 - **Pre-push review hook** → global `core.hooksPath` so every repo gets it.
+
+⚠️ That last step is the only one that changes something outside your home-dir dotfiles.
+`core.hooksPath` is a **machine-global** git setting that takes precedence over every
+repo's own `.git/hooks` (maestro's hook chains to a repo-local `pre-push` if one exists,
+so nothing is silently disabled). install.sh records the previous value and tells you
+what it was. To skip it entirely:
+
+```bash
+./install.sh --no-hook     # everything else; no git config touched
+```
+
+You can add the review gate later, per-repo (`ensemble install-review-hook`) or globally
+(`ensemble install-review-hook --global`). `./uninstall.sh` restores whatever
+`core.hooksPath` was before — including unsetting it if it was unset.
 
 Because everything is a symlink into the repo, editing a file in `~/maestro`
 takes effect immediately, and `git pull` updates the whole system.
@@ -62,13 +88,15 @@ takes effect immediately, and `git pull` updates the whole system.
 
 ## 3. Verify
 
+`install.sh` runs `ensemble doctor` for you and prints the result. Expect `0 fail`.
+It checks the CLIs, the skill/command/symlink wiring, the push hook, the artifacts
+dir, and network reachability to both model APIs.
+
 ```bash
-ensemble doctor
+ensemble doctor      # run it again any time something feels off
 ```
 
-Expect `0 fail`. It checks the CLIs, the skill/command/symlink wiring, the push
-hook, the artifacts dir, and network reachability to both model APIs. Run it any
-time something feels off — it's the fastest way to localize a problem.
+It's the fastest way to localize a problem.
 
 One expected note: a `WARN` for "no tmux server running yet" is normal before your
 first run.
@@ -104,9 +132,11 @@ Keep planning and taste in your session; dispatch the build to any implementer:
 ensemble delegate --to codex --eff high "Implement <spec>; keep tests green."
 ensemble delegate --to opus "Polish the dashboard layout; match existing styles."
 ```
-`--to` takes `opus | fable | sonnet | haiku | codex | gpt-5.5` or a full model id, and
-auto-routes to the right CLI. Effort scales to the task (Codex), so trivial work
-doesn't pay for `xhigh`. It runs in the background and shows in `ensemble jobs`.
+`--to` takes `opus | fable | sonnet | haiku | codex` or a full model id, and auto-routes
+to the right CLI. Friendly names aren't version-pinned — each CLI resolves them to its
+own current latest (`codex` uses the model in your `~/.codex/config.toml`), so `--to opus`
+always means today's Opus. Effort scales to the task (Codex), so trivial work doesn't pay
+for `xhigh`. It runs in the background and shows in `ensemble jobs`.
 
 ### Review on every push
 Just push. The hook has the other agent review your diff and asks before it leaves:
@@ -154,11 +184,12 @@ sandboxed Codex run means you need to escalate that run's permissions).
 
 ## 7. More machines
 
-Same three commands per machine — the repo carries the whole system:
+Same two commands per machine — the repo carries the whole system, and the installer
+verifies itself:
 
 ```bash
-git clone git@github.com:wdong97/maestro.git ~/maestro
-cd ~/maestro && ./install.sh && ensemble doctor
+git clone https://github.com/wdong97/maestro.git ~/maestro
+cd ~/maestro && ./install.sh
 ```
 
 Pull updates anytime with `git pull` (symlinks mean no reinstall needed for edits;

@@ -14,13 +14,19 @@ Claude CLI by model name.
 ensemble delegate --to <model> [--from <model>] [--eff low|medium|high|xhigh] [--ro] "<spec>"
 ```
 
-- `--to` (required): `opus` · `fable` · `sonnet` · `haiku` · `codex` · `gpt-5.5`, or any
-  full id (`claude-opus-4-8`, `gpt-5.5`, …). Claude-family → `claude -p`; GPT/Codex
-  family → `codex exec`.
+- `--to` (required): `opus` · `fable` · `sonnet` · `haiku` · `codex`, or any full id
+  (`claude-opus-5`, `gpt-5.6-sol`, …). Claude-family → `claude -p`; GPT/Codex family
+  → `codex exec`.
+  Friendly names are **not pinned to a version here** — they pass through to the CLI,
+  which resolves each to its own current latest (`codex` uses the model in
+  `~/.codex/config.toml`). So `--to opus` always means today's Opus. Pass a full id
+  only when you deliberately want a specific version.
 - `--from` (optional): label your orchestrator model (documentation only — the
   orchestrator is always your current session).
 - `--eff` (Codex implementers): scale reasoning to the task — `low` trivial · `medium`
-  routine · `high` standard · `xhigh` gnarly. Pick the lowest that will work.
+  routine · `high` standard · `xhigh` gnarly. The orchestrator picks the intelligence it
+  deems fit for the task; default to the lowest that will work, and step up (`high`/
+  `xhigh`) for correctness-critical or trust-pillar code.
 - `--ro`: read-only (analysis, no edits). Default lets the implementer edit the repo.
 
 It runs in the **background** (zombie-proof) and writes to `~/.ensemble/dispatch/`, so it
@@ -51,7 +57,7 @@ ensemble delegate --to opus "Polish the dashboard layout for <screen>; match exi
 #   (spawning Claude needs network; if your Codex sandbox blocks it, run with escalated permissions.)
 
 # Read-only analysis instead of edits:
-ensemble delegate --to gpt-5.5 --ro "Audit src/auth for missing input validation; list findings."
+ensemble delegate --to codex --ro "Audit src/auth for missing input validation; list findings."
 ```
 
 ## Review the result

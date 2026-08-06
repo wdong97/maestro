@@ -16,7 +16,9 @@
 #     `spawn`, --rw lets the single peer edit the target dir IN PLACE (that's the
 #     point of delegation); pass --dir <worktree> if you want it isolated.
 #   - Prompts are fed on STDIN to both CLIs (claude -p reads stdin; codex exec -).
-#   - Codex defaults: gpt-5.5 / xhigh (machine config). Override with --mx.
+#   - Models: friendly names pass through to each CLI, which resolves them to its
+#     own latest (claude --model opus|sonnet|fable|haiku; codex uses the model in
+#     ~/.codex/config.toml). Pin explicitly with --mc/--mx/--to <full-id>.
 #   - Artifacts live under  ~/.ensemble/<kind>/<name>/  (*.out = clean answer,
 #     *.log = full pane stream, *.done = agent exit code).
 
@@ -24,7 +26,7 @@ set -uo pipefail
 
 ROOT_DEFAULT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 BASE_DIR="$HOME/.ensemble"
-CODEX_MODEL_DEFAULT="gpt-5.5"
+CODEX_MODEL_DEFAULT=""   # empty = let the codex CLI use its own configured model
 CODEX_EFFORT_DEFAULT="xhigh"
 
 die() { echo "[ensemble] error: $*" >&2; exit 2; }
@@ -39,6 +41,17 @@ _realpath() {  # resolve symlinks portably (BSD/macOS readlink has no -f)
 }
 slug() { echo "$1" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-' | cut -c1-32; }
 
+# ps/reap/stop walk process trees through /proc (RAM via smaps_rollup, the
+# self-ancestor guard that stops us killing our own shell). Linux + WSL2 only —
+# fail loudly rather than silently reporting "nothing running" elsewhere.
+_need_procfs() { # $1=subcommand
+  [ -r /proc/self/stat ] && return 0
+  echo "[ensemble] '$1' needs Linux procfs (/proc); this is $(uname -s)." >&2
+  echo "[ensemble] duel/spawn/review/delegate/jobs/tail work everywhere — ps, reap, stop" >&2
+  echo "[ensemble] and the dash/web resource views are Linux + WSL2 only." >&2
+  return 1
+}
+
 have tmux || die "tmux not found"
 have git  || die "git not found"
 
@@ -52,21 +65,25 @@ claude_cmd() {
   local m=""; [ -n "$2" ] && m="--model $2"
   printf 'claude -p %s --permission-mode %s --add-dir %q --output-format text' "$m" "$pm" "$3"
 }
-# $1=mode $2=model $3=effort $4=workdir $5=outfile  (trailing '-' = read stdin)
+# $1=mode $2=model ("" = the codex CLI's own configured model) $3=effort
+# $4=workdir $5=outfile  (trailing '-' = read stdin)
 codex_cmd() {
   case "$2" in *[!A-Za-z0-9._:-]*) die "invalid model name: $2";; esac
   local sb; [ "$1" = rw ] && sb="--sandbox workspace-write --full-auto" || sb="--sandbox read-only"
-  printf "codex exec -C %q --skip-git-repo-check %s -m %s -c model_reasoning_effort=%q -c service_tier='\"fast\"' -o %q -" \
-    "$4" "$sb" "$2" "\"$3\"" "$5"
+  local m=""; [ -n "$2" ] && m="-m $2"
+  printf "codex exec -C %q --skip-git-repo-check %s %s -c model_reasoning_effort=%q -o %q -" \
+    "$4" "$sb" "$m" "\"$3\"" "$5"
 }
 
 # Resolve a friendly model name (or full id) to "family|model-id".
+# Friendly names are passed THROUGH to the CLI rather than pinned to an id here:
+# `claude --model opus|sonnet|fable|haiku` resolves each to the current latest, and
+# an empty codex model lets `codex` use the model in ~/.codex/config.toml. Pinning
+# ids here would silently freeze delegation on whatever was current when it was
+# written. Full ids still work for anyone who wants a specific version.
 _resolve_model() {
   case "$1" in
-    opus)       echo "claude|claude-opus-4-8";;
-    fable)      echo "claude|claude-fable-5";;
-    sonnet)     echo "claude|claude-sonnet-4-6";;
-    haiku)      echo "claude|claude-haiku-4-5-20251001";;
+    opus|fable|sonnet|haiku) echo "claude|$1";;
     claude-*)   echo "claude|$1";;
     codex)      echo "codex|$CODEX_MODEL_DEFAULT";;
     gpt-*|gpt5*|o[0-9]*) echo "codex|$1";;
@@ -207,10 +224,10 @@ cmd_delegate() {
     --ro) mode=ro;; --name) name="$2"; shift;; --dir) wd="$2"; shift;;
     --) shift; prompt="$*"; break;; -*) die "unknown delegate flag $1";; *) prompt="$*"; break;;
   esac; shift; done
-  [ -n "$to" ] || die "delegate needs --to <model> (opus|fable|sonnet|haiku|codex|gpt-5.5|claude-…|gpt-…)"
+  [ -n "$to" ] || die "delegate needs --to <model> (opus|fable|sonnet|haiku|codex|claude-…|gpt-…)"
   [ -n "$prompt" ] || die "delegate needs a PROMPT"
   local r fam id; r="$(_resolve_model "$to")"; fam="${r%%|*}"; id="${r#*|}"
-  [ -n "$fam" ] || die "unknown model '$to' — try: opus|fable|sonnet|haiku|codex|gpt-5.5|claude-…|gpt-…"
+  [ -n "$fam" ] || die "unknown model '$to' — try: opus|fable|sonnet|haiku|codex|claude-…|gpt-…"
   wd="$(cd "$wd" 2>/dev/null && pwd)" || die "delegate: --dir not found: $wd"   # absolute, so cd + -C/--add-dir agree
   [ -z "$name" ] && name="d-$(slug "$to")-$(date +%s)"
   local dir="$BASE_DIR/dispatch"; mkdir -p "$dir"
@@ -228,7 +245,7 @@ cmd_delegate() {
   # cd into the work dir so the implementer treats it as the project (Claude has no
   # -C; without this it would run in the caller's cwd). Harmless for Codex (uses -C too).
   printf '#!/usr/bin/env bash\nset -uo pipefail\ncd %q || exit 1\n%s\nexit ${PIPESTATUS[1]}\n' "$wd" "$pipeline" > "$runner"
-  echo "[delegate] from=${from:-this session} -> to=$id ($fam)  mode=$mode$([ "$fam" = codex ] && echo "  eff=$eff")"
+  echo "[delegate] from=${from:-this session} -> to=${id:-<codex config default>} ($fam)  mode=$mode$([ "$fam" = codex ] && echo "  eff=$eff")"
   echo "[delegate] run '$name'  |  follow: ensemble tail $name  |  clean result: $out"
   ( timeout -k 1m "${ENSEMBLE_DELEGATE_TIMEOUT:-30m}" bash "$runner" </dev/null >"$log" 2>&1; echo $? >"$done" ) &
   local cpid=$!
@@ -244,6 +261,8 @@ cmd_review() {
     --uncommitted) sel="--uncommitted";; --by) by="$2"; shift;;
     --mx) mx="$2"; shift;; *) die "unknown review flag $1";;
   esac; shift; done
+  case "$mx" in *[!A-Za-z0-9._:-]*) die "invalid model name: $mx";; esac
+  local mopt=""; [ -n "$mx" ] && mopt="-m $mx"   # empty = codex's own configured model
   local root="$ROOT_DEFAULT"
   local dir="$BASE_DIR/review/$(date +%s)"; mkdir -p "$dir"
   local diff="$dir/diff.patch"
@@ -258,8 +277,8 @@ cmd_review() {
 
   run_codex() {
     echo "===== CODEX REVIEW ($sel) ====="
-    codex exec review $sel -m "$mx" -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" >"$dir/codex.log" 2>&1 \
-      || codex exec -C "$root" --skip-git-repo-check --sandbox read-only -m "$mx" \
+    codex exec review $sel $mopt -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" >"$dir/codex.log" 2>&1 \
+      || codex exec -C "$root" --skip-git-repo-check --sandbox read-only $mopt \
            -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" - >>"$dir/codex.log" 2>&1 <<EOF
 Review this diff read-only for correctness bugs, security issues, and risky changes.
 Be specific (file:line), rank by severity, end with a SHIP or HOLD verdict.
@@ -402,15 +421,40 @@ cmd_doctor() {
     warn "no tmux server running yet -> the FIRST launch starts one; if started from inside a no-network sandbox the agent arm can't reach its API (run one duel from Claude first, or escalate)"
   fi
 
-  echo "[skill + entry points]"
-  [ -f "$HOME/.claude/skills/ensemble/SKILL.md" ] && ok "claude skill present (canonical)" || bad "missing ~/.claude/skills/ensemble/SKILL.md"
-  if [ -L "$HOME/.codex/skills/ensemble" ] && [ -f "$HOME/.codex/skills/ensemble/SKILL.md" ]; then ok "codex skill symlink resolves"
-  elif [ -e "$HOME/.codex/skills/ensemble" ]; then warn "~/.codex/skills/ensemble exists but isn't a resolving symlink"
-  else warn "codex can't see the skill (no ~/.codex/skills/ensemble symlink)"; fi
-  local c; for c in duel spawn ensemble-review ensemble-doctor; do
-    [ -f "$HOME/.claude/commands/$c.md" ]    && ok "claude /$c command" || warn "missing claude command /$c"
-    [ -e "$HOME/.codex/skills/$c/SKILL.md" ] && ok "codex \$$c skill"   || warn "missing codex skill $c"
+  echo "[skills + entry points]"
+  # every skill install.sh links, not just the ones with slash commands — read both
+  # lists off the repo so a newly added skill/command is checked without editing this
+  local REPO SKILLS CMDS
+  REPO="$(cd "$(dirname "$(_realpath "${BASH_SOURCE[0]}")")/../../.." 2>/dev/null && pwd)"
+  SKILLS="$(cd "$REPO/skills" 2>/dev/null && ls -d -- */ 2>/dev/null | tr -d /)"
+  CMDS="$(cd "$REPO/commands" 2>/dev/null && ls -1 -- *.md 2>/dev/null | sed 's/\.md$//')"
+  # fall back to the known set when this copy isn't running from the repo
+  [ -n "$SKILLS" ] || SKILLS="ensemble duel spawn delegate board ensemble-review ensemble-doctor"
+  [ -n "$CMDS" ]   || CMDS="duel spawn ensemble-review ensemble-doctor"
+  [ -f "$HOME/.claude/skills/ensemble/SKILL.md" ] || bad "missing ~/.claude/skills/ensemble/SKILL.md (the canonical skill)"
+  local s n=0 miss_c="" miss_x=""
+  for s in $SKILLS; do
+    n=$((n+1))
+    [ -e "$HOME/.claude/skills/$s/SKILL.md" ] || miss_c="$miss_c $s"
+    [ -e "$HOME/.codex/skills/$s/SKILL.md" ]  || miss_x="$miss_x $s"
   done
+  [ -z "$miss_c" ] && ok "claude sees all $n skills" || warn "claude missing skills:$miss_c (re-run install.sh)"
+  [ -z "$miss_x" ] && ok "codex sees all $n skills"  || warn "codex missing skills:$miss_x (re-run install.sh)"
+  local c miss_cmd="" have_cmd=""
+  for c in $CMDS; do
+    if [ -f "$HOME/.claude/commands/$c.md" ]; then have_cmd="$have_cmd /$c"; else miss_cmd="$miss_cmd /$c"; fi
+  done
+  [ -z "$miss_cmd" ] && ok "claude slash commands (${have_cmd# })" \
+                     || warn "missing claude commands:$miss_cmd (re-run install.sh)"
+
+  echo "[helper CLIs on PATH]"   # dash/web/board hard-fail without these
+  local b; for b in board ensemble-tui ensemble-web; do
+    have "$b" && ok "$b" || warn "$b not on PATH — 'board'/'ensemble dash'/'ensemble web' need it (re-run install.sh; check ~/.local/bin)"
+  done
+
+  echo "[platform]"
+  if [ "$(uname -s)" = Linux ] && [ -r /proc/self/stat ]; then ok "Linux/procfs — ps, reap, stop, and the dash/web resource views work"
+  else warn "$(uname -s) without procfs — duel/spawn/review/delegate work, but ps/reap/stop and the resource views are Linux+WSL2 only"; fi
 
   echo "[push review hook]"
   local hp; hp="$(git config --global --get core.hooksPath || echo '')"
@@ -606,6 +650,7 @@ _ps_stints() {
 # (SYS line + per-agent rows) for the dashboard; `--stints` groups per session;
 # `--by rss` sorts by RAM.
 cmd_ps() {
+  _need_procfs ps || return 1
   if [ "${1:-}" = --stints ]; then
     shift; local porc=0 sby=rss
     while [ $# -gt 0 ]; do case "$1" in --porcelain) porc=1;; --by) sby="${2:-rss}"; shift;; esac; shift; done
@@ -686,6 +731,7 @@ _reap_servers() {
 # Interactive: each item is numbered; you type the numbers to KEEP alive, then
 # confirm closing the rest. --dry-run lists only; --yes skips both prompts.
 cmd_reap() {
+  _need_procfs reap || return 1
   local idlecpu="${ENSEMBLE_REAP_IDLE_CPU:-1}" olderh="${ENSEMBLE_REAP_OLDER_H:-4}" servers=1 yes=0 dry=0 porc=0 closepids=""
   while [ $# -gt 0 ]; do case "$1" in
     --idle-cpu) idlecpu="$2"; shift;; --older-than) olderh="$2"; shift;;
@@ -817,6 +863,7 @@ _descendants() { local pid="$1" k; printf '%s\n' "$pid"; for k in $(pgrep -P "$p
 # flush, SIGKILL survivors, then tear down its tmux window/session. Used by `dash`
 # (the only write action there, behind a y/N confirm) and usable from the shell.
 cmd_stop() {
+  _need_procfs stop || return 1
   local yes=0; case "${1:-}" in --yes|-y) yes=1; shift;; esac
   local id="${1:-}"; [ -n "$id" ] || die "stop needs a run NAME (see: ensemble jobs)"
   local rows row kind name logf rundir; rows="$(_emit_jobs)"
@@ -949,8 +996,9 @@ ensemble — Claude + Codex together (tmux-visible)
        --eff scales Codex reasoning to the task (default xhigh; lower = faster).
   delegate --to <model> [--from <model>] [--eff E] [--ro] [--name N] [--dir D] "PROMPT"
        headless cost-aware delegation to ANY model (opus|fable|sonnet|haiku|codex|
-       gpt-5.5|claude-…|gpt-…); auto-routes to the Codex or Claude CLI; runs in the
-       background and shows in `ensemble jobs` (follow with `ensemble tail <name>`).
+       claude-…|gpt-…); auto-routes to the Codex or Claude CLI. Friendly names
+       resolve to each CLI's current latest; `codex` uses ~/.codex/config.toml.
+       Runs in the background, shows in `ensemble jobs` (follow: `ensemble tail`).
   review [--base REF|--uncommitted|--commit SHA] [--by claude|codex|both]
        peer-review a diff (default reviewer: codex).
   jobs                 list every run (duel/spawn/review/dispatch) + status, from anywhere

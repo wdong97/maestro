@@ -10,18 +10,24 @@ steer) and all capturing results to files (so an orchestrating agent reads the
 final answer without slurping the whole stream). One script drives everything:
 
 ```
-scripts/ensemble.sh <duel|spawn|review|attach|status|clean|install-review-hook>
+ensemble <duel|spawn|review|attach|status|clean|install-review-hook>
 ```
 
-Resolve the script path relative to this skill dir. Read-only is the default;
-`--rw` isolates each writer in its own git worktree+branch.
+`ensemble` is on PATH (maestro's `install.sh` symlinks it into `~/.local/bin`). If it
+isn't, run `scripts/ensemble.sh` from this skill dir and tell the user to re-run
+`install.sh`. Read-only is the default; `--rw` isolates each writer in its own git
+worktree+branch.
 
-This complements the existing skills — it does not replace them:
+How this relates to the other maestro skills — it complements, doesn't replace:
 - **`delegate`** (`ensemble delegate --to <model>`) = headless, cost-optimized
   dispatch to **any** model (Codex or Claude, auto-routed); shows in `ensemble jobs`.
   Use it when you do **not** need to watch.
 - **`ensemble`** = the same idea but **watchable in real tmux panes**, plus a
   symmetric duel and a push-time review gate.
+- **`board`** = what the work *is* (kanban + roadmap), where these show what's *running*.
+
+If the user also has these non-maestro skills installed, they compose well; skip the
+bullet if the skill isn't present:
 - **`agent-sync`** = handoff packets / session resume. Use it to brief either arm
   with prior state before a duel, and to reconcile after.
 - **`codex`** = single read-only Codex consultation. `ensemble duel` is the
@@ -39,7 +45,7 @@ This complements the existing skills — it does not replace them:
 ## 1. Duel — both answer the same prompt
 
 ```bash
-scripts/ensemble.sh duel "Design the retry/backoff strategy for the ingest worker."
+ensemble duel "Design the retry/backoff strategy for the ingest worker."
 # read-only by default: claude (plan mode) | codex (read-only sandbox), side by side
 ```
 
@@ -52,14 +58,15 @@ two opinions into one good answer; don't just paste both.
 Parallel implementation (each edits in an isolated worktree, zero clobber):
 
 ```bash
-scripts/ensemble.sh duel --rw "Implement the /healthz endpoint with a DB ping."
+ensemble duel --rw "Implement the /healthz endpoint with a DB ping."
 # branches: ens/<name>/claude  and  ens/<name>/codex
 # afterward: diff the two branches, judge, merge the winner, then `clean`
 git -C <repo> diff ens/<name>/claude ens/<name>/codex   # compare the two solutions
 ```
 
 Flags: `--name N` (stable dir/session name), `--mc <model>` (claude model),
-`--mx <model>` (codex model, default gpt-5.5), `--wait` (block until both finish
+`--mx <model>` (codex model; default = whatever `~/.codex/config.toml` sets),
+`--eff low|medium|high|xhigh` (codex reasoning), `--wait` (block until both finish
 instead of returning immediately).
 
 Orchestrator polling (don't foreground-sleep): launch without `--wait`, keep
@@ -71,8 +78,8 @@ code) before reading `*.out`.
 Either agent can spawn the other into a tmux window you can attach to:
 
 ```bash
-scripts/ensemble.sh spawn codex  --rw "Refactor src/auth/* to use the new TokenStore. Keep tests green."
-scripts/ensemble.sh spawn claude     "Audit src/api for missing input validation; list findings."
+ensemble spawn codex  --rw "Refactor src/auth/* to use the new TokenStore. Keep tests green."
+ensemble spawn claude     "Audit src/api for missing input validation; list findings."
 ```
 
 Lands as a window in the shared `ensemble` tmux session. `--dir D` runs it in a
@@ -86,17 +93,17 @@ the target dir **in place** (that is the point of delegation) — pass
 Review the current diff with the *other* agent (default reviewer: codex):
 
 ```bash
-scripts/ensemble.sh review                     # uncommitted vs HEAD
-scripts/ensemble.sh review --base origin/main  # vs upstream
-scripts/ensemble.sh review --commit <sha>
-scripts/ensemble.sh review --by both           # both agents review
+ensemble review                     # uncommitted vs HEAD
+ensemble review --base origin/main  # vs upstream
+ensemble review --commit <sha>
+ensemble review --by both           # both agents review
 ```
 
 Make it automatic for every push:
 
 ```bash
-scripts/ensemble.sh install-review-hook            # this repo (.git/hooks/pre-push)
-scripts/ensemble.sh install-review-hook --global   # all repos (core.hooksPath)
+ensemble install-review-hook            # this repo (.git/hooks/pre-push)
+ensemble install-review-hook --global   # all repos (core.hooksPath)
 ```
 
 The pre-push hook reviews the outgoing diff (vs the tracked upstream) before the
@@ -116,17 +123,17 @@ launching session, tmux, or a headless dispatch). Output always persists to file
 so "I can't see it" is solved even after tmux/the session is gone.
 
 ```bash
-scripts/ensemble.sh dash           # interactive TUI (read-only): runs in lanes (needs-you/running/idle) + RAM view;
+ensemble dash           # interactive TUI (read-only): runs in lanes (needs-you/running/idle) + RAM view;
                                    #   a=follow  x=stop  R=reap  p=panes  /=filter  ?=help  q=quit  (bell on finish)
-scripts/ensemble.sh web [port] [--lan] [--board DIR]  # browser app: runs cockpit + kanban tab per --board project
-scripts/ensemble.sh jobs           # one-shot list of every run: status, age, output path
-scripts/ensemble.sh tail <name>    # follow a run's output live (or `last` for the most recent)
-scripts/ensemble.sh watch          # plain-text auto-refreshing list (no interactivity)
-scripts/ensemble.sh ps [--by rss]  # task-manager: per-process agents sorted by CPU/RAM + project
-scripts/ensemble.sh ps --stints    # per open SESSION: RAM % of total (whole process tree summed)
-scripts/ensemble.sh reap [--dry-run]  # reclaim RAM: list idle sessions + dev servers (numbered); keep some, close rest
-scripts/ensemble.sh stop <name>    # gracefully stop ONE run (SIGTERM→SIGKILL tree + tmux teardown); dash's x action
-scripts/ensemble.sh report [--md]  # performance snapshot: reviews, findings, success rate, tokens
+ensemble web [port] [--lan] [--board DIR]  # browser app: runs cockpit + kanban tab per --board project
+ensemble jobs           # one-shot list of every run: status, age, output path
+ensemble tail <name>    # follow a run's output live (or `last` for the most recent)
+ensemble watch          # plain-text auto-refreshing list (no interactivity)
+ensemble ps [--by rss]  # task-manager: per-process agents sorted by CPU/RAM + project
+ensemble ps --stints    # per open SESSION: RAM % of total (whole process tree summed)
+ensemble reap [--dry-run]  # reclaim RAM: list idle sessions + dev servers (numbered); keep some, close rest
+ensemble stop <name>    # gracefully stop ONE run (SIGTERM→SIGKILL tree + tmux teardown); dash's x action
+ensemble report [--md]  # performance snapshot: reviews, findings, success rate, tokens
 ```
 
 `jobs` scans `~/.ensemble/{duel,spawn,review}/` and `~/.codex/dispatch/`. Status is
@@ -137,11 +144,11 @@ reasoning, so a real delegation legitimately runs minutes; `tail` shows it movin
 ## Housekeeping
 
 ```bash
-scripts/ensemble.sh doctor         # self-check: CLIs, skill/symlinks, commands, hook, network reachability
-scripts/ensemble.sh status         # sessions, run states, ensemble worktrees
-scripts/ensemble.sh attach <name>  # tmux attach (default session: ensemble)
-scripts/ensemble.sh clean <name>   # remove ONLY that run's worktrees + ens/<name>/* branches
-scripts/ensemble.sh clean --all    # prune every ensemble worktree + ens/* branch
+ensemble doctor         # self-check: CLIs, skill/symlinks, commands, hook, network reachability
+ensemble status         # sessions, run states, ensemble worktrees
+ensemble attach <name>  # tmux attach (default session: ensemble)
+ensemble clean <name>   # remove ONLY that run's worktrees + ens/<name>/* branches
+ensemble clean --all    # prune every ensemble worktree + ens/* branch
 ```
 
 `doctor` exits non-zero if any hard check fails. Run it first when something

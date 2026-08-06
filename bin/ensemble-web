@@ -33,6 +33,18 @@ def _run(args, timeout=12):
         return ""
 
 
+def _run_checked(args, timeout=12):
+    """(ok, stdout, last message line) — never report success when the CLI failed, and
+    never render an empty panel where the real answer is "this platform can't do that"
+    (ps/reap/stop need Linux procfs; a stop target may also be gone)."""
+    try:
+        p = subprocess.run([ENSEMBLE, *args], capture_output=True, text=True, timeout=timeout)
+        msg = (p.stderr or p.stdout or "").strip()
+        return p.returncode == 0, p.stdout, (msg.splitlines()[-1] if msg else "")
+    except Exception as e:
+        return False, "", str(e)
+
+
 def get_jobs():
     jobs = []
     for line in _run(["jobs", "--porcelain"]).splitlines():
@@ -45,7 +57,8 @@ def get_jobs():
 
 def get_state():
     sysd, agents = {}, []
-    for line in _run(["ps", "--stints", "--porcelain"]).splitlines():
+    res_ok, res_out, res_msg = _run_checked(["ps", "--stints", "--porcelain"])
+    for line in res_out.splitlines():
         p = line.split("\t")
         if p[0] == "SYS" and len(p) >= 6:
             sysd = dict(rampct=float(p[1] or 0), used=p[2], total=p[3],
@@ -58,7 +71,9 @@ def get_state():
         p = line.split("\t")
         if len(p) >= 4:
             reap.append(dict(pids=p[0], mb=int(p[1] or 0), kind=p[2], label=p[3].strip()))
-    return dict(sys=sysd, agents=agents, jobs=get_jobs(), reap=reap)
+    return dict(sys=sysd, agents=agents, jobs=get_jobs(), reap=reap,
+                resources_ok=res_ok,
+                resources_msg="" if res_ok else (res_msg or "resource views need Linux /proc"))
 
 
 def get_log(name, n=240):
@@ -178,14 +193,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             name = str(body.get("name", "")).strip()
             if not name:
                 return self._send({"error": "name required"}, 400)
-            _run(["stop", "--yes", name], timeout=30)
-            return self._send({"ok": True})
+            ok, _out, msg = _run_checked(["stop", "--yes", name], timeout=30)
+            return self._send({"ok": True} if ok else {"ok": False, "error": msg})
         if path == "/api/reap":
             pids = str(body.get("pids", "")).replace(",", " ").strip()
             if not pids or not re.fullmatch(r"[0-9 ]+", pids):
                 return self._send({"error": "bad pids"}, 400)
-            _run(["reap", "--close-pids", pids, "--yes"], timeout=40)
-            return self._send({"ok": True})
+            ok, _out, msg = _run_checked(["reap", "--close-pids", pids, "--yes"], timeout=40)
+            return self._send({"ok": True} if ok else {"ok": False, "error": msg})
         self._send({"error": "not found"}, 404)
 
 
@@ -378,17 +393,22 @@ function render(s){LAST=s;const jobs=s.jobs||[];
     reap.forEach(c=>{const row=document.createElement('div');row.className='rcand';
       row.innerHTML=`<input type=checkbox ${keptPids.has(c.pids)?'':'checked'} data-pids="${c.pids}"><label>${c.label}</label>`+
         `<span class=mut>${c.mb}M</span>`;$('reap').appendChild(row);});}
-  $('agents').innerHTML=(s.agents||[]).map(a=>`<span>${a.kind} ${a.proj} · ${a.rss}M · cpu ${Math.round(a.cpu)}%</span>`).join('');}
+  $('agents').innerHTML=(s.agents||[]).map(a=>`<span>${a.kind} ${a.proj} · ${a.rss}M · cpu ${Math.round(a.cpu)}%</span>`).join('');
+  const resok=s.resources_ok!==false;$('reapbtn').disabled=!resok;   // say WHY the panels are empty (Linux-only views) instead of showing zeros
+  if(!resok){const m=s.resources_msg||'resource views need Linux /proc';
+    $('rampct').textContent='n/a';$('rambar').style.width='0%';
+    $('agents').innerHTML=`<span class=mut>${esc(m)}</span>`;
+    $('reap').dataset.sig='unsupported';$('reap').innerHTML=`<div class=empty>${esc(m)}</div>`;}}
 document.addEventListener('click',async e=>{
   const name=e.target.dataset.stop;
   if(name){e.stopPropagation();if(!confirm('Stop run "'+name+'"?'))return;
-    acked.add(name);await api('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-    toast('stopping '+name);refresh();}
+    acked.add(name);const rs=await api('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}).then(x=>x.json()).catch(()=>({ok:false}));
+    toast(rs.ok?('stopping '+name):('stop failed — '+(rs.error||'see the terminal')));refresh();}
   if(e.target.id==='reapbtn'){const pids=[...document.querySelectorAll('#reap input:checked')].map(c=>c.dataset.pids).join(' ').trim();
     if(!pids){toast('nothing selected to close');return;}
     if(!confirm('Close the checked items? (unchecked stay alive)'))return;
-    await api('/api/reap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pids})});
-    toast('reclaiming…');refresh();}});
+    const rr=await api('/api/reap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pids})}).then(x=>x.json()).catch(()=>({ok:false}));
+    toast(rr.ok?'reclaiming…':('reclaim failed — '+(rr.error||'see the terminal')));refresh();}});
 async function refreshRuns(){try{const s=await(await api('/api/state')).json();render(s);}catch(e){}}
 function esc(x){return(x==null?'':(''+x)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function kago(iso){if(!iso)return'';const t=new Date(iso).getTime();if(isNaN(t))return'';return hms(Math.max(0,(Date.now()-t)/1000))+' ago';}

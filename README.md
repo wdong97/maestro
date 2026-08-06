@@ -4,24 +4,26 @@ Make **Claude Code** and **OpenAI Codex** work as one team on your machine: they
 share skills and project context, answer hard questions head-to-head, hand work to
 each other, review every push, and report to live dashboards you can watch.
 
-It's a plain git repo. `install.sh` symlinks it into `~/.claude`, `~/.codex`,
-`~/.local/bin`, and your git hooks. The repo stays the single source of truth:
-edits go live immediately, and `git pull` updates every machine.
+It's a plain git repo, symlinked into your agent config rather than installed as a
+package — so the repo stays the single source of truth: edits go live immediately, and
+`git pull` updates every machine.
 
-New here? **[docs/SETUP.md](docs/SETUP.md)** is the step-by-step guide for a fresh
-machine (humans and agents). The short version is below.
+## Quickstart
 
-## Quickstart (5 minutes)
-
-You need `claude`, `codex`, `tmux`, `python3`, and `~/.local/bin` on your `PATH`.
-(See SETUP if you're missing any.)
+You need `claude`, `codex`, `tmux`, and `python3` installed, plus `~/.local/bin` on your
+`PATH`. Linux and WSL2 run everything; macOS runs everything except the resource views
+(`ps`, `reap`, `stop`, and the RAM/CPU panes), which read Linux `/proc`.
 
 ```bash
-git clone git@github.com:wdong97/maestro.git ~/maestro
-cd ~/maestro
-./install.sh          # wires into ~/.claude, ~/.codex, ~/.local/bin, git hooks
-ensemble doctor       # verify — expect "0 fail"
+git clone https://github.com/wdong97/maestro.git ~/maestro
+cd ~/maestro && ./install.sh
 ```
+
+That symlinks the repo into `~/.claude`, `~/.codex`, `~/.local/bin`, and your git hooks,
+then runs `ensemble doctor` for you — expect `0 fail`. It also sets git's global
+`core.hooksPath` so every repo gets the pre-push review; `./install.sh --no-hook` skips
+that and touches no git config, and `./uninstall.sh` puts it back exactly as it was.
+[docs/SETUP.md](docs/SETUP.md) walks through each step and what to do when one fails.
 
 First win — ask both models the same question and get one synthesized answer:
 
@@ -44,8 +46,12 @@ current session; dispatch mechanical/bulk work to any implementer you pick:
 
 ```bash
 ensemble delegate --to <model> [--eff low|medium|high|xhigh] [--ro] "<spec>"
-# --to: opus | fable | sonnet | haiku | codex | gpt-5.5 | any full model id
+# --to: opus | fable | sonnet | haiku | codex | any full model id
 ```
+
+Friendly names aren't version-pinned — they pass through to each CLI, which resolves
+them to its own current latest (`codex` uses your `~/.codex/config.toml` model), so
+`--to opus` always means today's Opus. Pass a full id to pin a specific version.
 
 It auto-routes to the Codex or Claude CLI by model name, runs in the background,
 and shows in `ensemble jobs`. For a *watchable* peer in a tmux window instead, use
@@ -67,33 +73,28 @@ ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted
 ensemble ps --stints          # per open session (process tree summed): RAM % of total, CPU, #procs, project
 ```
 
-`web` is the whole thing in a browser, as tabs. The **Runs** tab is the cockpit —
-NEEDS YOU / RUNNING / DONE lanes, live resource gauges, click a run to expand its
-output, **stop** buttons on live runs, and a **reclaim** panel (select all / none,
-uncheck what to keep, close the rest). Each `--board DIR` adds a color-coded
-**project tab** (it reads `DIR/orchestration/board-state.json`; registered boards are
-remembered) carrying the full orchestration project — a **Board** (kanban) and
-**Roadmap** (slices, gates, sign-off) sub-view, with a header pipeline strip showing
-where the project sits in its process. A run working inside one of those projects is
-**tinted with that project's color** on the Runs tab, so you can see what's working
-where. Every data and action call is gated by a token printed at startup; it binds
-`127.0.0.1` by default (`--lan` binds `0.0.0.0` for a browser on another host, e.g.
-WSL → Windows).
-
-Runs also get a short, readable **auto-name** at launch — a fast `claude` (haiku) call
-turns the prompt into a slug like `auth-tokenstore-refactor` (the run's stable id is
-unchanged; this is display-only). Disable with `ENSEMBLE_AUTONAME=0`.
+`web` is the whole thing in a browser. The **Runs** tab groups every run into **NEEDS
+YOU** (just finished, not yet opened), **RUNNING**, **DONE**, and **IDLE/RECLAIMABLE** —
+live resource gauges, click a run to expand its output, **stop** buttons on live runs,
+and a reclaim panel (select all or none, uncheck what to keep, close the rest). Each
+`--board DIR` adds a color-coded **project tab** — a **Board** (kanban) and **Roadmap**
+(slices, gates, sign-off) read from `DIR/orchestration/board-state.json`, remembered once
+registered — and runs working inside that project are tinted with its color. Every data
+and action call is gated by a token printed at startup, and it binds `127.0.0.1` unless
+you pass `--lan` (for a browser on another host, e.g. WSL → Windows).
 
 ```bash
 ensemble web --lan --board ~/proj-a --board ~/proj-b   # runs cockpit + a tab per project board
 ```
 
-The dashboard groups runs into **NEEDS YOU** (just finished — recent and not yet
-opened), **RUNNING**, **DONE** (older or already-handled, dimmed), and
-**IDLE/RECLAIMABLE**, and rings the bell when a run finishes. It's read-only —
-keystrokes never reach a live agent — with two guarded actions that both ask first:
-`x` stops the selected run, `R` reaps idle sessions. (NEEDS-YOU window:
+`dash` is the same lanes in a terminal, and rings the bell when a run finishes. It's
+read-only — keystrokes never reach a live agent — apart from two actions that both ask
+first: `x` stops the selected run, `R` reaps idle sessions. (NEEDS-YOU window:
 `ENSEMBLE_DASH_RECENT_MIN`, default 30.)
+
+Runs get a short, readable **auto-name** at launch — a fast `claude` (haiku) call turns
+the prompt into a slug like `auth-tokenstore-refactor`. Display-only, the run's stable id
+is unchanged; disable with `ENSEMBLE_AUTONAME=0`.
 
 **Reclaim RAM — `reap` / `stop`.** Idle agents and dev servers add up. List what's
 worth closing, keep the ones you still want, and close the rest:
@@ -127,11 +128,40 @@ board claim S1.api --owner you   # claim → progress → review → done, with 
 **Shared coding guidelines.** `guidelines/coding-guidelines.md` is `@import`ed into
 every Claude and Codex session (think-before-coding, simplicity, surgical changes).
 
+**Write for the reader — `/plain-docs`.** A shared writing skill for anything a person
+reads: READMEs, setup guides, release notes, proposals, runbooks. It's team-neutral —
+your style guide wins — and both agents get it.
+
+```bash
+/plain-docs docs/SETUP.md            # revise a draft, keeping the author's voice
+/plain-docs "release note for v2 auth changes"   # draft one from scratch
+/plain-docs README.md --check        # review against the checklist, change nothing
+```
+
+**Explain it in plain words — `/eli5`.** For when an agent just did something and you
+want the short true version: what happened, one everyday analogy, and the decision it
+leaves you with. It re-tells, it never redoes — the facts and the plan stay put.
+
+```bash
+/eli5                                # explain the last thing the agent said or did
+/eli5 hooks/pre-push                 # explain a file, an error, a term, a command
+```
+
+**End the session — `/closeout`.** For when the work is done but the agent keeps finding
+one more thing to improve. It audits the thread's scope against what's actually on disk,
+reports done / left / not doing / needs you in plain English, finishes only the leftovers
+you approve, and then stops.
+
+```bash
+/closeout                            # audit, report, ask once, close
+```
+
 ## Verify / undo
 
 ```bash
-ensemble doctor       # checks CLIs, skills, commands, hook, network, from either agent
-./uninstall.sh        # remove the symlinks; restores any *.maestro-bak backups
+ensemble doctor       # checks CLIs, skills, commands, helper bins, hook, platform, network
+./install.sh --no-hook  # install everything EXCEPT the global git core.hooksPath change
+./uninstall.sh        # remove the symlinks; restore *.maestro-bak backups + core.hooksPath
 ```
 
 ## Layout
@@ -139,7 +169,7 @@ ensemble doctor       # checks CLIs, skills, commands, hook, network, from eithe
 | Path | What |
 |---|---|
 | `skills/` | agent skills + the `ensemble` CLI (`skills/ensemble/scripts/ensemble.sh`) — shared by both agents |
-| `commands/` | Claude slash commands (`/duel`, `/spawn`, `/ensemble-review`, `/ensemble-doctor`) |
+| `commands/` | Claude slash commands — one `.md` per command, all symlinked by `install.sh` |
 | `bin/` | `board` CLI, `ensemble-tui` (terminal dashboard), `ensemble-web` (browser dashboard) — symlinked onto `PATH` |
 | `board/` | the build-board template `board init` scaffolds into a project |
 | `hooks/pre-push` | peer-review-before-push gate (portable; calls `ensemble` on PATH) |

@@ -10,6 +10,26 @@ CLAUDE="$HOME/.claude"
 CODEX="$HOME/.codex"
 BIN="$HOME/.local/bin"
 GITHOOKS="$HOME/.config/git/hooks"
+STATE="$HOME/.config/maestro"
+
+WITH_HOOK=1
+for a in "$@"; do case "$a" in
+  --no-hook) WITH_HOOK=0;;
+  -h|--help) cat <<'HELP'
+maestro install — wire this repo into ~/.claude, ~/.codex, ~/.local/bin, git hooks.
+
+  ./install.sh              full install, including the global pre-push review hook
+  ./install.sh --no-hook    everything EXCEPT the global git core.hooksPath change
+
+The hook step sets git's global core.hooksPath, which overrides every repo's own
+.git/hooks on this machine. Use --no-hook to skip it; you can install the review
+hook per-repo later with `ensemble install-review-hook`.
+
+Idempotent. Existing non-maestro files are backed up to <path>.maestro-bak.
+HELP
+    exit 0;;
+  *) echo "unknown flag: $a (try: ./install.sh --help)" >&2; exit 2;;
+esac; done
 
 note() { printf '  %s\n' "$*"; }
 
@@ -64,13 +84,30 @@ link "$REPO/guidelines/coding-guidelines.md" "$CODEX/coding-guidelines.md"
 ensure_import "$CLAUDE/CLAUDE.md" "@coding-guidelines.md"
 ensure_import "$CODEX/AGENTS.md"  "@$HOME/.codex/coding-guidelines.md"
 
-echo "[hook] global pre-push peer review"
-chmod +x "$REPO/hooks/pre-push"
-link "$REPO/hooks/pre-push" "$GITHOOKS/pre-push"
-cur="$(git config --global --get core.hooksPath || true)"
-if [ "$cur" != "$GITHOOKS" ]; then git config --global core.hooksPath "$GITHOOKS"; note "set   core.hooksPath=$GITHOOKS"
-else note "ok    core.hooksPath=$GITHOOKS"; fi
+if [ "$WITH_HOOK" = 1 ]; then
+  echo "[hook] global pre-push peer review"
+  chmod +x "$REPO/hooks/pre-push"
+  link "$REPO/hooks/pre-push" "$GITHOOKS/pre-push"
+  cur="$(git config --global --get core.hooksPath || true)"
+  if [ "$cur" != "$GITHOOKS" ]; then
+    # core.hooksPath is machine-global and overrides EVERY repo's own .git/hooks.
+    # Record the previous value first so uninstall.sh can put it back exactly.
+    mkdir -p "$STATE"; printf '%s\n' "$cur" >"$STATE/prev-hookspath"
+    git config --global core.hooksPath "$GITHOOKS"
+    note "set   core.hooksPath=$GITHOOKS   (was: ${cur:-unset})"
+    note "NOTE  that setting is GLOBAL and takes precedence over each repo's own"
+    note "      .git/hooks. Our pre-push chains to a repo-local one if it exists."
+    note "      ./uninstall.sh restores it; skip it next time with --no-hook."
+  else note "ok    core.hooksPath=$GITHOOKS"; fi
+else
+  echo "[hook] skipped (--no-hook) — no global git config touched"
+  note "add it later per-repo:  ensemble install-review-hook"
+  note "            or global:  ensemble install-review-hook --global"
+fi
 
 echo
-echo "maestro installed. Verify with:  ensemble doctor"
+echo "maestro installed — verifying:"
+echo
+"$BIN/ensemble" doctor || note "doctor found problems above; fix them, then re-run: ensemble doctor"
+echo
 echo "(slash commands / skills load in NEW agent sessions.)"
