@@ -69,8 +69,26 @@ For multi-step tasks, state a brief plan:
 Strong success criteria let you loop independently. Weak criteria ("make it
 work") require constant clarification.
 
+## 5. Land Every Update
+
+End any message that reports progress, finishes work, or reports a failure with:
+
+```
+**What this means.** <2-3 plain sentences: what changed, why it matters.>
+
+**Next steps**
+1. <verb-first action> — <you | me | waiting on X> — <rough size>
+```
+
+At most three steps, ordered by what to do first, nothing below them. "Nothing
+needed from you" is a complete and correct Next steps section — never invent work
+to fill it. After a failure, the step is the recovery action, not "investigate".
+
+Skip it for a direct answer to a direct question, or a question back to the user.
+Full rules: the `next-steps` skill.
+
 ---
 
 These guidelines are working if: fewer unnecessary changes in diffs, fewer
-rewrites due to overcomplication, and clarifying questions come before
-implementation rather than after mistakes.
+rewrites due to overcomplication, clarifying questions come before implementation
+rather than after mistakes, and nobody has to ask "so what do I do now?"

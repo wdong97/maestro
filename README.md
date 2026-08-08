@@ -156,6 +156,14 @@ you approve, and then stops.
 /closeout                            # audit, report, ask once, close
 ```
 
+**Land every update — `/next-steps`.** Ends an update the way you'd want it: what it
+means in plain words, then at most three next steps, each with an owner and a size — or
+an explicit "nothing needed from you." No more asking "ok, what's next?"
+
+```bash
+/next-steps                          # summarize + state the next steps for what just happened
+```
+
 ## Verify / undo
 
 ```bash

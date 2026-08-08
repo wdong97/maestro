@@ -59,9 +59,8 @@ cd ~/maestro
 
 - **Skills** → symlinked into `~/.claude/skills/` and `~/.codex/skills/` (both agents
   see `ensemble`, `duel`, `spawn`, `delegate`, `board`, `ensemble-review`,
-  `ensemble-doctor`, `plain-docs`, `eli5`, `closeout`).
-- **Slash commands** → `~/.claude/commands/` (`/duel`, `/spawn`, `/ensemble-review`,
-  `/ensemble-doctor`, `/plain-docs`, `/eli5`, `/closeout`).
+  `ensemble-doctor`, `plain-docs`, `eli5`, `closeout`, `next-steps`).
+- **Slash commands** → `~/.claude/commands/` — one per file in `commands/`.
 - **CLIs** → `~/.local/bin/`: `ensemble`, `board`, `ensemble-tui` (the `dash` TUI),
   and `ensemble-web` (the browser dashboard).
 - **Coding guidelines** → `@import`ed into `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`.
