@@ -128,6 +128,19 @@ board claim S1.api --owner you   # claim → progress → review → done, with 
 **Shared coding guidelines.** `guidelines/coding-guidelines.md` is `@import`ed into
 every Claude and Codex session (think-before-coding, simplicity, surgical changes).
 
+**Stay out of each other's way — `/standup`.** Trade status with every live agent
+session in the repo: each ping declares your own slice *and* asks for theirs, so the
+overlaps surface before two agents edit the same file. `peers.sh` shows the collision
+surface for free (no session is interrupted); the pings fill in intent; and when your
+slice lands you tell the peers you blocked that their file is free again.
+
+```bash
+~/.claude/skills/standup/scripts/peers.sh --repo   # who's live in this repo, HARD vs SOFT overlap
+/standup                                          # declare + ask every session in this repo, report the split
+/standup all                                      # widen to every agent on the machine
+/standup done "auth refactor landed on main"      # tell the peers you constrained that they're unblocked
+```
+
 **Write for the reader — `/plain-docs`.** A shared writing skill for anything a person
 reads: READMEs, setup guides, release notes, proposals, runbooks. It's team-neutral —
 your style guide wins — and both agents get it.
