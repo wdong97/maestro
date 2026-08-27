@@ -16,13 +16,19 @@ MYWT=$(git rev-parse --show-toplevel 2>/dev/null)
 # One row per SESSION: an agent process whose parent is also an agent process is a
 # child of that session, not a session of its own.
 rows=$(ps -eo pid=,ppid=,comm=,args= 2>/dev/null | awk '
+  # kind from the executable only: comm, else the argv tokens BEFORE the first flag
+  # (a wrapper like `node /opt/claude -p "...codex exec..."` must not read as codex)
+  function exekind(   i,t) {
+    for (i=4; i<=NF; i++) { t=$i
+      if (t ~ /^-/) break
+      if (t ~ /(^|\/)codex$/)  return "codex"
+      if (t ~ /(^|\/)claude$/) return "claude" }
+    return "claude" }
   { c=$3; l=tolower($0) }
   (c=="codex"||c=="claude" || l ~ /codex exec|codex resume|claude -p/) \
     && l !~ /ensemble\.sh|ensemble-tui|status\.py|peers\.sh|maestro\/bin|awk| -eo / {
     pid[$1]=1; par[$1]=$2
-    kind[$1] = (c=="codex") ? "codex" : (c=="claude") ? "claude" \
-             : ($4 ~ /(^|\/)codex$/) ? "codex" : ($4 ~ /(^|\/)claude$/) ? "claude" \
-             : (l ~ /codex (exec|resume)/) ? "codex" : "claude" }
+    kind[$1] = (c=="codex") ? "codex" : (c=="claude") ? "claude" : exekind() }
   END { for (p in pid) if (!(par[p] in pid)) printf "%s\t%s\n", p, kind[p] }')
 [ -z "$rows" ] && { echo "(no live claude/codex agent processes)"; exit 0; }
 
