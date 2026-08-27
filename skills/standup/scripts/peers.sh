@@ -32,8 +32,12 @@ rows=$(ps -eo pid=,ppid=,comm=,args= 2>/dev/null | awk '
     pid[$1]=1; par[$1]=$2
     kind[$1] = (c=="codex") ? "codex" : (c=="claude") ? "claude" : exekind() }
   END {
-    for (p in pid) if (kind[p] == "")
-      for (q in pid) if (par[q] == p && kind[q] != "") { kind[p] = kind[q]; break }
+    do {                       # to a fixed point: chained wrappers (timeout -> bash -lc
+      changed = 0              # -> bash -lc -> codex) need more than one pass, and awk
+      for (p in pid)           # iterates unordered, so one pass is order-dependent
+        if (kind[p] == "")
+          for (q in pid) if (par[q] == p && kind[q] != "") { kind[p] = kind[q]; changed = 1; break }
+    } while (changed)
     for (p in pid) if (!(par[p] in pid))
       printf "%s\t%s\n", p, (kind[p] == "" ? "agent?" : kind[p]) }')
 [ -z "$rows" ] && { echo "(no live claude/codex agent processes)"; exit 0; }
