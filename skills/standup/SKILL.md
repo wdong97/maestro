@@ -37,7 +37,9 @@ you get back in the replies**, not on order or name.
 reachability, not the AGENT column** — a row is pingable if and only if you can match it
 to a `ListAgents` entry (join on the working tree, confirmed in the reply). A standalone
 codex process has no `SendMessage` inbox and never appears there; a mislabeled row might.
-Unmatched rows are still evidence: they tell you a tree is contested.
+Unmatched rows are still evidence: they tell you a tree is contested. A row can also
+read `agent?` when the launch shape hides which CLI it is — treat it like any other row
+and let the `ListAgents` match settle it.
 
 ## 2. Who gets pinged
 
