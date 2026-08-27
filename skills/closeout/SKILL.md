@@ -1,6 +1,6 @@
 ---
 name: closeout
-description: End a session cleanly — audit every item in the thread's scope against real evidence, report in plain English what was done, what's left, and what's deliberately not happening, then finish only the leftovers the user approves and stop. Use when the user says wrap up, close this out, are we done, ship it, what's left, or stop, and use it on yourself when you notice you're improving work nobody asked you to improve.
+description: End a session cleanly — name the goal the session set out to reach, audit every item in scope against real evidence, report in plain English how far the goal actually got, what's left, and what's deliberately not happening, then finish only the leftovers the user approves and stop. Use when the user says wrap up, close this out, are we done, ship it, what's left, or stop, and use it on yourself when you notice you're improving work nobody asked you to improve.
 ---
 
 # closeout — audit, report, get approval, stop
@@ -15,7 +15,15 @@ note in the report, never a task you start.
 
 ## Phase 1 — Audit against evidence
 
-Build the item list from three sources, in this order:
+**First, name the goal.** One sentence, in the user's own terms, for what they came into
+this thread to get — the outcome, not the task list ("the export endpoint works in
+staging", not "add a route and some tests"). Take it from their opening request, not from
+what you ended up doing. If it moved mid-session — they pivoted, or the first attempt
+proved impossible — say what it started as, what it became, and which one the work was
+measured against. If the thread never had one clear goal, say that too; a session that
+wandered is a fact worth reporting, not something to tidy up.
+
+Then build the item list from three sources, in this order:
 
 1. **What they asked for** — every request in the thread, including ones a later pivot
    replaced. A request doesn't stop existing because the conversation moved on.
@@ -38,9 +46,16 @@ Unverified and the report says what would settle it.
 
 ## Phase 2 — Report in plain English
 
-Short, past tense, no jargon, no hedging. Four sections, each one line per item; drop
-any section that's empty except **Left**:
+Short, past tense, no jargon, no hedging. Lead with the goal, then the sections — one
+line per item; drop any section that's empty except **Left**:
 
+- **Goal** — the one sentence from Phase 1, and the pivot if there was one.
+- **How far it got** — one of: **met** / **mostly met, with X outstanding** / **partly
+  met** / **not met** / **goal changed midway**, plus a sentence on what the user can
+  actually do now that they couldn't before. The verdict follows from the **Done** list
+  and nothing else: not from how much work happened, how many commits landed, or how hard
+  it was. A session with ten commits that doesn't reach the goal is **not met**, and
+  saying so plainly is the point of this skill.
 - **Done** — what it is and where it lives (`path:line`, a command's output, a commit).
 - **Left** — what remains and how big it is: minutes, or another session.
 - **Not doing** — dropped or declined, so nothing disappears quietly.
@@ -73,7 +88,7 @@ start anything while the question is open.
 
 The final message:
 
-1. One line on the state of the work.
+1. One line on the state of the work, against the goal — met, or what it's still short of.
 2. What's uncommitted, unmerged, or unshipped — with the exact command to finish it.
    Don't run it unless they asked.
 3. Follow-ups worth remembering, written as a list they can paste into an issue.
@@ -89,6 +104,8 @@ the single most common way this fails.
 - Don't polish work the user already accepted.
 - Don't replay the conversation; the report is the record.
 - Don't count planning, explaining, or reading as delivered work.
+- Don't reshape the goal to fit what you achieved. The goal is what they asked for at the
+  start; a smaller version of it that you happened to finish is "partly met", not "met".
 - Don't mark anything done that you didn't check this session.
 - Don't split the approval into several questions. One question, then act.
 
@@ -100,6 +117,13 @@ whatever handoff notes your team expects.
 
 ## Example report
 
+> **Goal:** get CSV export working end to end so support can pull a customer's rows
+> without asking engineering.
+>
+> **How far it got:** partly met. The endpoint returns data and the limit is raised, so
+> support can export by hand — but it drops long-running pulls, so the original "without
+> asking engineering" isn't true yet.
+>
 > **Done**
 > - Export endpoint added — `api/routes/export.py:41`, returns 200 on the smoke test.
 > - Row limit raised to 50k — `config/limits.yaml:12`.

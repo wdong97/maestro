@@ -161,9 +161,10 @@ leaves you with. It re-tells, it never redoes — the facts and the plan stay pu
 ```
 
 **End the session — `/closeout`.** For when the work is done but the agent keeps finding
-one more thing to improve. It audits the thread's scope against what's actually on disk,
-reports done / left / not doing / needs you in plain English, finishes only the leftovers
-you approve, and then stops.
+one more thing to improve. It names the goal you started the thread with and says how far
+it actually got, audits the rest of the scope against what's on disk, reports done / left
+/ not doing / needs you in plain English, finishes only the leftovers you approve, and
+then stops.
 
 ```bash
 /closeout                            # audit, report, ask once, close
