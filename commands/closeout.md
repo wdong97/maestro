@@ -12,9 +12,10 @@ Apply the `closeout` skill to this session. Read the skill first
    requests a later pivot replaced), what you promised and never did, and what is
    actually on disk. Verify with `git status`, `git diff --stat`, the files, and the
    test output. Your earlier messages don't count as evidence.
-2. **Report** in plain English, leading with the goal and how far it got — met /
-   mostly met / partly met / not met / changed midway, judged from the Done list rather
-   than from effort spent — then Done (with proof), Left (with a size), Not doing, Needs
+2. **Report** in plain English, leading with the goal and how far it got — always one
+   of met / mostly met / partly met / not met, against whichever goal Phase 1 measured
+   the work by (a pivot goes on the Goal line, it never replaces the verdict), judged
+   from the Done list rather than from effort spent — then Done (with proof), Left (with a size), Not doing, Needs
    you. Say plainly if something failed or if tests never ran.
 3. **Ask one question** — which leftovers to finish now, with your recommendation. If
    nothing is left, skip it. Start nothing while the question is open.

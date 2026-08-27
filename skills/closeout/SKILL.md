@@ -50,9 +50,11 @@ Short, past tense, no jargon, no hedging. Lead with the goal, then the sections 
 line per item; drop any section that's empty except **Left**:
 
 - **Goal** — the one sentence from Phase 1, and the pivot if there was one.
-- **How far it got** — one of: **met** / **mostly met, with X outstanding** / **partly
-  met** / **not met** / **goal changed midway**, plus a sentence on what the user can
-  actually do now that they couldn't before. The verdict follows from the **Done** list
+- **How far it got** — always one of these four: **met** / **mostly met, with X
+  outstanding** / **partly met** / **not met**, judged against whichever goal Phase 1
+  says the work was measured against. A pivot belongs on the **Goal** line, not here: it
+  explains which goal you're judging, it never replaces the verdict. Add a sentence on
+  what the user can actually do now that they couldn't before. The verdict follows from the **Done** list
   and nothing else: not from how much work happened, how many commits landed, or how hard
   it was. A session with ten commits that doesn't reach the goal is **not met**, and
   saying so plainly is the point of this skill.
