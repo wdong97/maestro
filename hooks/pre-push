@@ -1,21 +1,104 @@
 #!/usr/bin/env bash
 # maestro pre-push: peer-review the push before it goes out. Portable — calls
 # `ensemble` from PATH (installed by maestro install.sh), no hardcoded paths.
-# Bypass once with:  ENSEMBLE_REVIEW=0 git push     reviewer: ENSEMBLE_REVIEWER=claude|codex|both
-if [ "${ENSEMBLE_REVIEW:-1}" != 0 ]; then
+#
+# Bypass once with:  ENSEMBLE_REVIEW=0 git push
+# Reviewer:          ENSEMBLE_REVIEWER=claude|codex|both
+# Time budget:       ENSEMBLE_REVIEW_TIMEOUT=600   (seconds)
+#
+# This gate used to fail in both directions at once, and did on 27 Aug 2026:
+#
+#   - The y/N prompt was conditional on a TTY, so anywhere without one — an agent, a
+#     script, a non-interactive shell — the review printed its findings and the push
+#     proceeded regardless. A review that found five P2 issues shipped all five to
+#     production, on a repo where main auto-deploys.
+#   - The review ran unbounded in front of the push, so a slow review did not delay a
+#     push, it killed it. Three pushes in a row died that way and the work sat unpushed.
+#
+# So: a clean review asks nothing and gets out of the way. A review with findings gates —
+# prompting where it can, refusing where it cannot. A review that cannot finish also
+# refuses, because "reviewed and clean" and "never reviewed" must not look alike from the
+# outside. Every refusal names the way through.
+
+set -u
+
+ensemble_review_gate() {
   if ! command -v ensemble >/dev/null 2>&1; then
     echo "[ensemble] 'ensemble' not on PATH — skipping review (run maestro install.sh)" >&2
-  else
-    UP="$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)"
-    SEL="--uncommitted"; [ -n "$UP" ] && SEL="--base $UP"
-    echo "[ensemble] peer-reviewing push ($SEL)..." >&2
-    ensemble review $SEL --by "${ENSEMBLE_REVIEWER:-codex}" 1>&2
-    if [ -t 1 ] && [ -e /dev/tty ]; then
-      printf '\n[ensemble] push anyway? [y/N] ' >&2; read -r a </dev/tty
-      case "$a" in y|Y|yes) :;; *) echo "[ensemble] push aborted." >&2; exit 1;; esac
-    fi
+    return 0
   fi
+
+  local upstream selector budget output status reply
+  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)"
+  selector="--uncommitted"
+  [ -n "$upstream" ] && selector="--base $upstream"
+  budget="${ENSEMBLE_REVIEW_TIMEOUT:-600}"
+  output="$(mktemp -t ensemble-review.XXXXXX)" || return 0
+
+  echo "[ensemble] peer-reviewing push ($selector, up to ${budget}s)..." >&2
+  # shellcheck disable=SC2086  # selector is deliberately two words
+  timeout "$budget" ensemble review $selector --by "${ENSEMBLE_REVIEWER:-codex}" \
+    >"$output" 2>&1
+  status=$?
+  cat "$output" >&2
+
+  if [ "$status" -eq 124 ]; then
+    rm -f "$output"
+    cat >&2 <<EOF
+
+[ensemble] review did not finish within ${budget}s — push refused.
+[ensemble] A push that outran its review is not a reviewed push.
+[ensemble]   raise the budget:  ENSEMBLE_REVIEW_TIMEOUT=1200 git push
+[ensemble]   or review first:   ensemble review $selector
+[ensemble]   then push:         ENSEMBLE_REVIEW=0 git push
+EOF
+    return 1
+  fi
+
+  if [ "$status" -ne 0 ]; then
+    rm -f "$output"
+    cat >&2 <<EOF
+
+[ensemble] review failed to run (exit $status) — push refused.
+[ensemble] bypass deliberately with:  ENSEMBLE_REVIEW=0 git push
+EOF
+    return 1
+  fi
+
+  # Findings are emitted as "- [P1] ...", "- [P2] ...". Keyed on that marker, so a change
+  # to the reviewer's output format would quietly stop this gating — if the format moves,
+  # move this with it.
+  if ! grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$output"; then
+    rm -f "$output"
+    echo "[ensemble] review clean — pushing." >&2
+    return 0
+  fi
+  rm -f "$output"
+
+  if [ -t 1 ] && [ -e /dev/tty ]; then
+    printf '\n[ensemble] review found issues. push anyway? [y/N] ' >&2
+    read -r reply </dev/tty
+    case "$reply" in
+      y | Y | yes | YES) return 0 ;;
+      *)
+        echo "[ensemble] push aborted." >&2
+        return 1
+        ;;
+    esac
+  fi
+
+  cat >&2 <<EOF
+
+[ensemble] review found issues and there is no terminal to confirm on — push refused.
+[ensemble] Fix them, or push deliberately with:  ENSEMBLE_REVIEW=0 git push
+EOF
+  return 1
+}
+
+if [ "${ENSEMBLE_REVIEW:-1}" != 0 ]; then
+  ensemble_review_gate || exit 1
 fi
+
 # Chain to a repo-local classic hook if one exists (so global install never
 # silently disables a repo's own pre-push). Guarded against calling itself.
 CLASSIC="$(git rev-parse --absolute-git-dir 2>/dev/null)/hooks/pre-push"
