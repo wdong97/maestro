@@ -12,7 +12,6 @@ ONLY_REPO=0
 [ -r /proc/self/cwd ] || { echo "peers.sh needs /proc (Linux/WSL only)"; exit 1; }
 MYREPO=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); MYREPO="${MYREPO%/.git}"
 MYWT=$(git rev-parse --show-toplevel 2>/dev/null)
-MYPID=$$
 
 # One row per SESSION: an agent process whose parent is also an agent process is a
 # child of that session, not a session of its own.
@@ -30,20 +29,30 @@ while IFS=$'\t' read -r pid kind; do
   cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null); [ -n "$cwd" ] || continue
   wt=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
   repo=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-  if [ -z "$wt" ]; then
+  repo="${repo%/.git}"
+  if [ -z "$wt" ]; then                        # session outside any git worktree
+    [ "$ONLY_REPO" = 1 ] && continue           # ...never in scope for --repo
     printf -- '-\t%s\t%s\t%s\t-\t-\n' "$cwd" "$pid" "$kind" >>"$tmp"; continue
   fi
+  [ "$ONLY_REPO" = 1 ] && [ "$repo" != "$MYREPO" ] && continue
   br=$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null)
   n=$(git -C "$wt" status --porcelain 2>/dev/null | wc -l)
-  repo="${repo%/.git}"
-  [ "$ONLY_REPO" = 1 ] && [ "$repo" != "$MYREPO" ] && continue
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$repo" "$wt" "$pid" "$kind" "$br" "$n" >>"$tmp"
 done <<<"$rows"
 
+# Which row (if any) IS this session? Walk our own ancestry until we hit a listed
+# pid — running from a plain shell, none of them is us and every row is a peer.
+MYPID=""
+p=$$
+while [ -n "$p" ] && [ "$p" != 1 ]; do
+  if cut -f3 "$tmp" | grep -qx "$p"; then MYPID="$p"; break; fi
+  p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+done
+
 if [ "$ONLY_REPO" = 1 ]; then
   echo "== agent sessions in this repo: ${MYREPO:-not a git repo} =="
-  peers=$(wc -l <"$tmp")
-  if [ "${peers:-0}" -le 1 ]; then
+  total=$(wc -l <"$tmp"); [ -n "$MYPID" ] && peers=$((total - 1)) || peers=$total
+  if [ "${peers:-0}" -le 0 ]; then
     echo "  no peer sessions in this repo — only you. Nothing to ping."
     echo "  (drop --repo to see every agent on the machine.)"
     exit 0
@@ -53,9 +62,13 @@ fi
 echo "== live agent sessions =="
 printf "  %-8s %-6s %-5s %-34s %s\n" PID AGENT DIRTY BRANCH "WORKING TREE"
 sort "$tmp" | while IFS=$'\t' read -r repo wt pid kind br n; do
-  me=""; [ "$wt" = "$(git rev-parse --show-toplevel 2>/dev/null)" ] && me="  <- your tree"
-  printf "  %-8s %-6s %-5s %-34s %s%s\n" "$pid" "$kind" "$n" "$br" "$wt" "$me"
+  tag=""; [ "$wt" = "$MYWT" ] && tag="  <- your tree"
+  [ "$pid" = "$MYPID" ] && tag="  <- you"
+  printf "  %-8s %-6s %-5s %-34s %s%s\n" "$pid" "$kind" "$n" "$br" "$wt" "$tag"
 done
+if cut -f4 "$tmp" | grep -qx codex; then
+  echo "  note: codex sessions have no SendMessage inbox — evidence only, you cannot ping them."
+fi
 
 echo
 echo "== collision surface =="
@@ -71,7 +84,7 @@ while read -r n repo; do
   [ "$n" -ge 2 ] && [ "$repo" != - ] || continue
   wtn=$(awk -F'\t' -v r="$repo" '$1==r{print $2}' "$tmp" | sort -u | wc -l)
   [ "$wtn" -ge 2 ] || continue; found=1
-  echo "  SOFT  $n agents in the SAME repo, $wtn working trees: ${repo%/.git}"
+  echo "  SOFT  $n agents in the SAME repo, $wtn working trees: $repo"
   awk -F'\t' -v r="$repo" '$1==r{printf "          pid %s (%s) on %-28s %s\n",$3,$4,$5,$2}' "$tmp" | sort -u
 done < <(cut -f1 "$tmp" | sort | uniq -c | sort -rn)
 

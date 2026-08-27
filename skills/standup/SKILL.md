@@ -33,12 +33,21 @@ Then `ListAgents` for the addressable names (`cb-finance-4c`, …) and each one'
 busy/idle state. The two views don't share ids — **join them on the working-tree path
 you get back in the replies**, not on order or name.
 
+`peers.sh` sees more sessions than you can talk to: a standalone **codex** process has
+no `SendMessage` inbox and is not in `ListAgents`. Codex rows are evidence — they tell
+you a tree is contested — but you cannot ping them. Same for any claude row you can't
+match to a `ListAgents` name.
+
 ## 2. Who gets pinged
 
 **Default: every live session in your repo — all of them, no triage.** That is what
 `--repo` returns (it excludes nobody in the repo and includes worktrees of it). Ping
 them all in one round; don't decide for the user that some peer probably isn't
 relevant. `ListAgents` gives you the names to send to.
+
+Unreachable peers (codex, or anything absent from `ListAgents`) still count as
+collisions — you just can't ask them. Report them as *present but unreachable*, and
+route anything you need from them through the user.
 
 If `--repo` reports no peers, say exactly that and stop — do not silently widen to the
 whole machine. Widen only when the user asks for it ("all sessions", "everyone"), and
@@ -134,8 +143,8 @@ the record outlives every session in the standup.
 ```
 
 Then: **Collisions** (ranked, with the evidence line that proves each), **Agreed split**
-(owner per item, and which peers confirmed), **No reply from** (name them — never invent
-a peer's status). Close with `next-steps`.
+(owner per item, and which peers confirmed), **No reply from** and **Couldn't reach**
+(name them, and keep the two separate — never invent a peer's status). Close with `next-steps`.
 
 ## Rules
 
