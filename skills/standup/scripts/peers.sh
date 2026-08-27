@@ -19,7 +19,10 @@ rows=$(ps -eo pid=,ppid=,comm=,args= 2>/dev/null | awk '
   { c=$3; l=tolower($0) }
   (c=="codex"||c=="claude" || l ~ /codex exec|codex resume|claude -p/) \
     && l !~ /ensemble\.sh|ensemble-tui|status\.py|peers\.sh|maestro\/bin|awk| -eo / {
-    pid[$1]=1; par[$1]=$2; kind[$1]=(l~/codex/)?"codex":"claude" }
+    pid[$1]=1; par[$1]=$2
+    kind[$1] = (c=="codex") ? "codex" : (c=="claude") ? "claude" \
+             : ($4 ~ /(^|\/)codex$/) ? "codex" : ($4 ~ /(^|\/)claude$/) ? "claude" \
+             : (l ~ /codex (exec|resume)/) ? "codex" : "claude" }
   END { for (p in pid) if (!(par[p] in pid)) printf "%s\t%s\n", p, kind[p] }')
 [ -z "$rows" ] && { echo "(no live claude/codex agent processes)"; exit 0; }
 

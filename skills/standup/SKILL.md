@@ -33,10 +33,11 @@ Then `ListAgents` for the addressable names (`cb-finance-4c`, …) and each one'
 busy/idle state. The two views don't share ids — **join them on the working-tree path
 you get back in the replies**, not on order or name.
 
-`peers.sh` sees more sessions than you can talk to: a standalone **codex** process has
-no `SendMessage` inbox and is not in `ListAgents`. Codex rows are evidence — they tell
-you a tree is contested — but you cannot ping them. Same for any claude row you can't
-match to a `ListAgents` name.
+`peers.sh` sees more sessions than you can talk to. **`ListAgents` is what decides
+reachability, not the AGENT column** — a row is pingable if and only if you can match it
+to a `ListAgents` entry (join on the working tree, confirmed in the reply). A standalone
+codex process has no `SendMessage` inbox and never appears there; a mislabeled row might.
+Unmatched rows are still evidence: they tell you a tree is contested.
 
 ## 2. Who gets pinged
 
@@ -55,8 +56,10 @@ then it is the same round against the unfiltered list.
 
 ## 3. Send the round, all at once
 
-One `SendMessage` per peer, every peer, in a single batch of parallel calls — no
-confirmation step, sending is the job. The recipient's human sees only the **first
+One `SendMessage` per **reachable** peer — every row you matched to a `ListAgents`
+entry, none skipped — in a single batch of parallel calls, no confirmation step; sending
+is the job. Unmatched rows get no message (there is no inbox to send to); they go
+straight to the *Couldn't reach* line of the report. The recipient's human sees only the **first
 line** as a preview, so make it self-contained.
 
 **Declare first, then ask.** Fill in your own six lines before you send — from your own

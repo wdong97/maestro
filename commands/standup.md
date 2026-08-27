@@ -16,9 +16,11 @@ Otherwise:
 1. `~/.claude/skills/standup/scripts/peers.sh --repo` for the collision surface in this
    repo (use no flag if the args say `all`/`everyone`), and `ListAgents` for the names.
 2. If it reports no peers in this repo, say so and stop. Otherwise send ONE round of
-   pings to EVERY session it listed, in a single batch of parallel `SendMessage` calls —
-   each ping leads with YOUR six-line MINE block, then asks for theirs. No triage, no
-   confirmation step.
+   pings to every listed session you can match to a `ListAgents` entry — all of them, in
+   a single batch of parallel `SendMessage` calls, each leading with YOUR six-line MINE
+   block before asking for theirs. No triage, no confirmation step. Rows with no
+   `ListAgents` match (standalone codex sessions) have no inbox: report them as present
+   but unreachable, don't try to message them.
 3. While replies land, verify the contested working trees against git yourself.
 4. Report the table, the ranked collisions, the agreed split, and who never answered.
 5. Remember the debt: when your own slice lands or frees a file you claimed, send the
