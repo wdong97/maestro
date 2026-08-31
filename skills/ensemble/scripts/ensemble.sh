@@ -275,6 +275,18 @@ cmd_review() {
   esac
   if [ ! -s "$diff" ]; then echo "[ensemble] no changes to review ($sel)"; return 0; fi
 
+  # Every reviewer must end with a machine-readable verdict, because the push gate
+  # refuses output it cannot read. A model prompted for one supplies its own; the native
+  # `codex exec review` has its own format and supplies none, so derive it from what the
+  # run actually produced. A reviewer that failed to run gets HOLD — never SHIP by
+  # default, since "no findings" and "never ran" must not look alike.
+  emit_verdict() {   # $1 = reviewer output file, $2 = its exit status
+    grep -qE '^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$' "$1" 2>/dev/null && return
+    if [ "$2" -ne 0 ] || [ ! -s "$1" ]; then echo "VERDICT: HOLD"; return; fi
+    if grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$1"; then echo "VERDICT: HOLD"
+    else echo "VERDICT: SHIP"; fi
+  }
+
   run_codex() {
     echo "===== CODEX REVIEW ($sel) ====="
     codex exec review $sel $mopt -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" >"$dir/codex.log" 2>&1 \
@@ -287,7 +299,9 @@ That line is parsed by the push gate — without it the push is refused.
 
 $(cat "$diff")
 EOF
+    local rc=$?
     cat "$dir/codex.out" 2>/dev/null
+    emit_verdict "$dir/codex.out" "$rc"
   }
   run_claude() {
     echo "===== CLAUDE REVIEW ($sel) ====="
@@ -300,6 +314,7 @@ That line is parsed by the push gate — without it the push is refused.
 
 $(cat "$diff")
 EOF
+    emit_verdict "$dir/claude.out" "$?"
   }
   case "$by" in
     codex)  run_codex;;
