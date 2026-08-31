@@ -110,14 +110,16 @@ EOF
   # A reviewer that emits neither has told us nothing (a `claude` review that skipped the
   # format, a truncated run, an error page). Silence read as approval is exactly the
   # failure this gate exists to stop, so no verdict = refuse.
-  local findings verdict
-  findings=0
+  # --by both puts two reviews in one file. Any HOLD wins over any SHIP: a reviewer that
+  # objected does not stop objecting because the one after it was happy.
+  local findings held shipped
+  findings=0; held=0; shipped=0
   grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$output" && findings=1
-  verdict="$(grep -oiE 'VERDICT:[[:space:]]*(SHIP|HOLD)' "$output" | tail -n 1 |
-    tr '[:lower:]' '[:upper:]' | sed -E 's/.*(SHIP|HOLD).*/\1/')"
+  grep -qiE 'VERDICT:[[:space:]]*HOLD' "$output" && held=1
+  grep -qiE 'VERDICT:[[:space:]]*SHIP' "$output" && shipped=1
   rm -f "$output"
 
-  if [ -z "$verdict" ]; then
+  if [ "$held" -eq 0 ] && [ "$shipped" -eq 0 ]; then
     cat >&2 <<EOF
 
 [ensemble] the review ended without a SHIP or HOLD verdict — push refused.
@@ -128,7 +130,7 @@ EOF
     return 1
   fi
 
-  if [ "$findings" -eq 0 ] && [ "$verdict" = SHIP ]; then
+  if [ "$findings" -eq 0 ] && [ "$held" -eq 0 ]; then
     echo "[ensemble] review clean (VERDICT: SHIP) — pushing." >&2
     return 0
   fi
