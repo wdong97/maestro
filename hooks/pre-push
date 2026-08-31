@@ -115,12 +115,25 @@ EOF
   #     has said nothing, and the other's SHIP does not speak for it
   #   - any HOLD beats any SHIP; a reviewer does not stop objecting because the one
   #     after it was happy
-  local findings held expected verdicts
-  findings=0; held=0
+  #
+  # A verdict counts only as a line of its own — reviews of this very hook quote
+  # "VERDICT: HOLD" mid-sentence, and prose about a verdict is not a verdict. Within a
+  # section the last standalone line wins, so a reviewer that thinks aloud and then
+  # concludes is read by its conclusion.
+  local findings held expected verdicts counts
+  findings=0
   grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$output" && findings=1
-  grep -qiE 'VERDICT:[[:space:]]*HOLD' "$output" && held=1
   expected=1; [ "${ENSEMBLE_REVIEWER:-codex}" = both ] && expected=2
-  verdicts="$(grep -ciE 'VERDICT:[[:space:]]*(SHIP|HOLD)' "$output")"
+  counts="$(awk '
+    { up = toupper($0) }
+    up ~ /^=+[[:space:]]*(CODEX|CLAUDE)[[:space:]]+REVIEW/ { sec++; next }
+    up ~ /^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$/ {
+      v = up; sub(/^[[:space:]]*VERDICT:[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
+      seen[sec ? sec : 1] = v }
+    END { n = 0; hold = 0
+          for (i in seen) { n++; if (seen[i] == "HOLD") hold++ }
+          printf "%d %d\n", n, hold }' "$output")"
+  verdicts="${counts%% *}"; held="${counts##* }"
   rm -f "$output"
 
   if [ "$verdicts" -lt "$expected" ]; then
