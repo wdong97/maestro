@@ -280,11 +280,18 @@ cmd_review() {
   # `codex exec review` has its own format and supplies none, so derive it from what the
   # run actually produced. A reviewer that failed to run gets HOLD — never SHIP by
   # default, since "no findings" and "never ran" must not look alike.
-  emit_verdict() {   # $1 = reviewer output file, $2 = its exit status
-    grep -qE '^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$' "$1" 2>/dev/null && return
-    if [ "$2" -ne 0 ] || [ ! -s "$1" ]; then echo "VERDICT: HOLD"; return; fi
-    if grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$1"; then echo "VERDICT: HOLD"
-    else echo "VERDICT: SHIP"; fi
+  # $3 = derive: the native `codex exec review`, whose format we know — no [P#] findings
+  #      from a successful run genuinely means clean, so SHIP may be inferred.
+  #      require: a prompted reviewer, told to end with a verdict. If it didn't, we do not
+  #      know what it meant, and unknown is HOLD.
+  # The leading newline matters: reviewer output often has no trailing newline, and a
+  # verdict glued to the end of the last finding is not a line the gate can see.
+  emit_verdict() {   # $1 = reviewer output file, $2 = its exit status, $3 = derive|require
+    grep -qiE '^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$' "$1" 2>/dev/null && return
+    if [ "$2" -ne 0 ] || [ ! -s "$1" ]; then printf '\nVERDICT: HOLD\n'; return; fi
+    if [ "$3" != derive ]; then printf '\nVERDICT: HOLD\n'; return; fi
+    if grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$1"; then printf '\nVERDICT: HOLD\n'
+    else printf '\nVERDICT: SHIP\n'; fi
   }
 
   run_codex() {
@@ -301,7 +308,7 @@ $(cat "$diff")
 EOF
     local rc=$?
     cat "$dir/codex.out" 2>/dev/null
-    emit_verdict "$dir/codex.out" "$rc"
+    emit_verdict "$dir/codex.out" "$rc" derive
   }
   run_claude() {
     echo "===== CLAUDE REVIEW ($sel) ====="
@@ -314,7 +321,7 @@ That line is parsed by the push gate — without it the push is refused.
 
 $(cat "$diff")
 EOF
-    emit_verdict "$dir/claude.out" "$?"
+    emit_verdict "$dir/claude.out" "$?" require
   }
   case "$by" in
     codex)  run_codex;;
