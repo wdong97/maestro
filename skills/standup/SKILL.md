@@ -17,6 +17,7 @@ show) and **intent** (what each session says it's about to do). Evidence alone m
 ## 1. Map the field (free, no one is interrupted)
 
 ```bash
+# from a claude session use ~/.claude, from a codex session use ~/.codex — same file
 ~/.claude/skills/standup/scripts/peers.sh --repo   # default: sessions in YOUR repo
 ~/.claude/skills/standup/scripts/peers.sh          # every agent on the machine
 ```
@@ -40,6 +41,11 @@ codex process has no `SendMessage` inbox and never appears there; a mislabeled r
 Unmatched rows are still evidence: they tell you a tree is contested. A row can also
 read `agent?` when the launch shape hides which CLI it is — treat it like any other row
 and let the `ListAgents` match settle it.
+
+**From a Codex session:** `peers.sh` and the whole evidence half work unchanged, but the
+ping round needs a runtime with cross-session messaging (`ListAgents`/`SendMessage`).
+Without it, run the evidence half, report the contested trees, and route the questions
+through the user.
 
 ## 2. Who gets pinged
 

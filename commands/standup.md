@@ -13,7 +13,7 @@ changed. Then stop.
 
 Otherwise:
 
-1. `~/.claude/skills/standup/scripts/peers.sh --repo` for the collision surface in this
+1. `~/.claude/skills/standup/scripts/peers.sh --repo` (`~/.codex/…` from Codex) for the collision surface in this
    repo (use no flag if the args say `all`/`everyone`), and `ListAgents` for the names.
 2. If it reports no peers in this repo, say so and stop. Otherwise send ONE round of
    pings to every listed session you can match to a `ListAgents` entry — all of them, in

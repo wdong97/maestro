@@ -160,6 +160,28 @@ leaves you with. It re-tells, it never redoes — the facts and the plan stay pu
 /eli5 hooks/pre-push                 # explain a file, an error, a term, a command
 ```
 
+**Come back to it — `/recap`.** For picking work up after time has passed. It spends a
+minute refreshing what's gone stale — the PR and its checks, jobs you started, CI for the
+current commit, the branch, the threads you linked — then reports four things and nothing
+else: the goal quoted in your words, where each item stands *with its evidence*, what's
+blocked on a person vs blocked on something technical, and next steps each tagged `[me]`
+or `[you]`. Passing unit tests don't count as proof; CI green on this commit, the thing
+working where it'll be used, or a person confirming, do. It starts no new work — a bug it
+finds is a line in the report. In Claude: `/recap`. In Codex: `$recap`.
+
+**Where are we — `/progress`.** A fifteen-second checkpoint you can run any time: the
+goal of the session in one sentence, then a plain list of what's done, in progress, not
+started, and dropped, and one line on what stands between here and the goal. It reports
+and stops — no questions, no new work — so you can carry straight on.
+
+```bash
+/progress                            # the goal + where it stands
+/progress just the API work          # narrow it
+```
+
+(The skill is `status`; the command is `/progress` because Claude Code owns `/status`.
+Both new skills are symlinked into `~/.claude` **and** `~/.codex`, so either agent can use them.)
+
 **End the session — `/closeout`.** For when the work is done but the agent keeps finding
 one more thing to improve. It names the goal you started the thread with and says how far
 it actually got, audits the rest of the scope against what's on disk, reports done / left
