@@ -110,20 +110,24 @@ EOF
   # A reviewer that emits neither has told us nothing (a `claude` review that skipped the
   # format, a truncated run, an error page). Silence read as approval is exactly the
   # failure this gate exists to stop, so no verdict = refuse.
-  # --by both puts two reviews in one file. Any HOLD wins over any SHIP: a reviewer that
-  # objected does not stop objecting because the one after it was happy.
-  local findings held shipped
-  findings=0; held=0; shipped=0
+  # --by both puts two reviews in one file, and each one must answer for itself:
+  #   - every requested reviewer has to leave a verdict; one that crashed or rambled
+  #     has said nothing, and the other's SHIP does not speak for it
+  #   - any HOLD beats any SHIP; a reviewer does not stop objecting because the one
+  #     after it was happy
+  local findings held expected verdicts
+  findings=0; held=0
   grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$output" && findings=1
   grep -qiE 'VERDICT:[[:space:]]*HOLD' "$output" && held=1
-  grep -qiE 'VERDICT:[[:space:]]*SHIP' "$output" && shipped=1
+  expected=1; [ "${ENSEMBLE_REVIEWER:-codex}" = both ] && expected=2
+  verdicts="$(grep -ciE 'VERDICT:[[:space:]]*(SHIP|HOLD)' "$output")"
   rm -f "$output"
 
-  if [ "$held" -eq 0 ] && [ "$shipped" -eq 0 ]; then
+  if [ "$verdicts" -lt "$expected" ]; then
     cat >&2 <<EOF
 
-[ensemble] the review ended without a SHIP or HOLD verdict — push refused.
-[ensemble] Unreadable is not clean. Read it yourself, then:
+[ensemble] expected $expected verdict(s), got $verdicts — push refused.
+[ensemble] A reviewer that answered nothing has not approved anything.
 [ensemble]   re-run:  ensemble review $selector
 [ensemble]   or push: ENSEMBLE_REVIEW=0 git push
 EOF
