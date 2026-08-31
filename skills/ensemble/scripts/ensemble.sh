@@ -358,22 +358,27 @@ cmd_clean() {
 
 cmd_install_hook() {
   local scope="repo"; [ "${1:-}" = --global ] && scope="global"
-  local hookfile
-  if [ "$scope" = global ]; then
-    local hp="$HOME/.config/git/hooks"; mkdir -p "$hp"
-    git config --global core.hooksPath "$hp"; hookfile="$hp/pre-push"
-  else
-    local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || die "not in a git repo"
-    mkdir -p "$gd/hooks"; hookfile="$gd/hooks/pre-push"
-  fi
   # Install the canonical hook rather than a copy of it: an embedded duplicate drifts
   # from hooks/pre-push, and on 27 Aug 2026 it did — this path was still handing out the
   # fail-open version months after the real hook was fixed.
+  #
+  # Resolve it BEFORE touching anything: --global repoints core.hooksPath machine-wide,
+  # and failing after that would leave git aimed at a directory with no hook in it,
+  # silently disabling every hook the user already had.
   local repo canonical
   repo="$(cd "$(dirname "$(_realpath "${BASH_SOURCE[0]}")")/../../.." 2>/dev/null && pwd)"
   canonical="$repo/hooks/pre-push"
   [ -f "$canonical" ] || die "can't find the maestro hook at $canonical — re-run install.sh from the repo"
+  local hookfile
+  if [ "$scope" = global ]; then
+    local hp="$HOME/.config/git/hooks"; mkdir -p "$hp"; hookfile="$hp/pre-push"
+  else
+    local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || die "not in a git repo"
+    mkdir -p "$gd/hooks"; hookfile="$gd/hooks/pre-push"
+  fi
   ln -sfn "$canonical" "$hookfile" 2>/dev/null || cp "$canonical" "$hookfile"
+  # config last: only point git at the directory once the hook is actually in it
+  [ "$scope" = global ] && git config --global core.hooksPath "$(dirname "$hookfile")"
   chmod +x "$hookfile"
   echo "[ensemble] pre-push review hook installed ($scope): $hookfile"
   echo "[ensemble]   bypass once: ENSEMBLE_REVIEW=0 git push   |  reviewer env: ENSEMBLE_REVIEWER=claude|codex|both"
