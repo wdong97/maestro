@@ -273,7 +273,11 @@ cmd_review() {
                   git -C "$root" diff HEAD >"$diff"
                 else { git -C "$root" diff; git -C "$root" diff --cached; } >"$diff"; fi;;
   esac
-  if [ ! -s "$diff" ]; then echo "[ensemble] no changes to review ($sel)"; return 0; fi
+  if [ ! -s "$diff" ]; then
+    echo "[ensemble] no changes to review ($sel)"
+    printf '\nVERDICT: SHIP\n'   # an empty range has nothing to object to
+    return 0
+  fi
 
   # Every reviewer must end with a machine-readable verdict, because the push gate
   # refuses output it cannot read. A model prompted for one supplies its own; the native

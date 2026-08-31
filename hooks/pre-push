@@ -54,16 +54,46 @@ ensemble_with_timeout() {
   wait "$pid"
 }
 
+# What is actually being pushed. git feeds pre-push one line per ref on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# with an all-zero remote sha for a ref that does not exist there yet. Ask git rather
+# than guessing from @{u}: on a branch's first push there IS no upstream, and the old
+# guess fell back to "--uncommitted" — reviewing the working tree, i.e. nothing, while
+# real commits went out behind it.
+ensemble_push_base() {
+  local refs="$1" zero=0000000000000000000000000000000000000000
+  local lref lsha rref rsha origin_head
+  while read -r lref lsha rref rsha; do
+    [ -n "${lsha:-}" ] || continue
+    [ "$lsha" = "$zero" ] && continue                   # deleting a ref: nothing to review
+    if [ -n "${rsha:-}" ] && [ "$rsha" != "$zero" ]; then
+      echo "$rsha"; return 0                            # they have this ref: diff from it
+    fi
+    origin_head="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+    [ -n "$origin_head" ] || origin_head=origin/main
+    git merge-base "$lsha" "$origin_head" 2>/dev/null && return 0
+    return 1
+  done <<REFS
+$refs
+REFS
+  return 1
+}
+
 ensemble_review_gate() {
   if ! command -v ensemble >/dev/null 2>&1; then
     echo "[ensemble] 'ensemble' not on PATH — skipping review (run maestro install.sh)" >&2
     return 0
   fi
 
-  local upstream selector budget output status reply
-  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)"
-  selector="--uncommitted"
-  [ -n "$upstream" ] && selector="--base $upstream"
+  local upstream selector budget output status reply base
+  base="$(ensemble_push_base "${ENSEMBLE_PUSH_REFS:-}")"
+  if [ -n "$base" ]; then
+    selector="--base $base"
+  else
+    upstream="$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)"
+    selector="--uncommitted"
+    [ -n "$upstream" ] && selector="--base $upstream"
+  fi
   budget="${ENSEMBLE_REVIEW_TIMEOUT:-600}"
   if ! output="$(mktemp -t ensemble-review.XXXXXX)"; then
     cat >&2 <<EOF
@@ -173,6 +203,10 @@ EOF
   return 1
 }
 
+# stdin can only be read once, and the classic hook we may chain to wants it too.
+ENSEMBLE_PUSH_REFS="$(cat)"
+export ENSEMBLE_PUSH_REFS
+
 if [ "${ENSEMBLE_REVIEW:-1}" != 0 ]; then
   ensemble_review_gate || exit 1
 fi
@@ -182,5 +216,9 @@ fi
 CLASSIC="$(git rev-parse --absolute-git-dir 2>/dev/null)/hooks/pre-push"
 SELF_RP="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 CLASSIC_RP="$(readlink -f "$CLASSIC" 2>/dev/null || echo "$CLASSIC")"
-if [ -x "$CLASSIC" ] && [ "$CLASSIC_RP" != "$SELF_RP" ]; then exec "$CLASSIC" "$@"; fi
+if [ -x "$CLASSIC" ] && [ "$CLASSIC_RP" != "$SELF_RP" ]; then
+  exec "$CLASSIC" "$@" <<REFS
+$ENSEMBLE_PUSH_REFS
+REFS
+fi
 exit 0
