@@ -19,8 +19,35 @@
 # prompting where it can, refusing where it cannot. A review that cannot finish also
 # refuses, because "reviewed and clean" and "never reviewed" must not look alike from the
 # outside. Every refusal names the way through.
+#
+# "Clean" is a positive signal, never an absence: the reviewer must end with an explicit
+# VERDICT line. Output with no verdict is unreadable, not passing, and is refused too.
 
 set -u
+
+# timeout(1) is GNU coreutils — absent from a stock macOS, which this repo supports.
+# Prefer it, then Homebrew's gtimeout, then do it ourselves. Exit 124 = timed out,
+# matching timeout(1) so the caller has one contract.
+ensemble_with_timeout() {
+  local budget="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$budget" "$@"; return $?; fi
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout "$budget" "$@"; return $?; fi
+  local pid waited=0
+  "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$budget" ]; then
+      kill -TERM "$pid" 2>/dev/null
+      sleep 2
+      kill -KILL "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid"
+}
 
 ensemble_review_gate() {
   if ! command -v ensemble >/dev/null 2>&1; then
@@ -33,11 +60,18 @@ ensemble_review_gate() {
   selector="--uncommitted"
   [ -n "$upstream" ] && selector="--base $upstream"
   budget="${ENSEMBLE_REVIEW_TIMEOUT:-600}"
-  output="$(mktemp -t ensemble-review.XXXXXX)" || return 0
+  if ! output="$(mktemp -t ensemble-review.XXXXXX)"; then
+    cat >&2 <<EOF
+[ensemble] could not create a file to capture the review — push refused.
+[ensemble] No review can be read, and unread is not clean.
+[ensemble] bypass deliberately with:  ENSEMBLE_REVIEW=0 git push
+EOF
+    return 1
+  fi
 
   echo "[ensemble] peer-reviewing push ($selector, up to ${budget}s)..." >&2
   # shellcheck disable=SC2086  # selector is deliberately two words
-  timeout "$budget" ensemble review $selector --by "${ENSEMBLE_REVIEWER:-codex}" \
+  ensemble_with_timeout "$budget" ensemble review $selector --by "${ENSEMBLE_REVIEWER:-codex}" \
     >"$output" 2>&1
   status=$?
   cat "$output" >&2
@@ -65,18 +99,38 @@ EOF
     return 1
   fi
 
-  # Findings are emitted as "- [P1] ...", "- [P2] ...". Keyed on that marker, so a change
-  # to the reviewer's output format would quietly stop this gating — if the format moves,
-  # move this with it.
-  if ! grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$output"; then
-    rm -f "$output"
-    echo "[ensemble] review clean — pushing." >&2
-    return 0
-  fi
+  # Two independent signals, and BOTH must say clean:
+  #   findings  — "- [P1] ...", "- [P2] ..."; any marker means there is something to fix
+  #   verdict   — the reviewer's own "VERDICT: SHIP" / "VERDICT: HOLD" closing line
+  # A reviewer that emits neither has told us nothing (a `claude` review that skipped the
+  # format, a truncated run, an error page). Silence read as approval is exactly the
+  # failure this gate exists to stop, so no verdict = refuse.
+  local findings verdict
+  findings=0
+  grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$output" && findings=1
+  verdict="$(grep -oiE 'VERDICT:[[:space:]]*(SHIP|HOLD)' "$output" | tail -n 1 |
+    tr '[:lower:]' '[:upper:]' | sed -E 's/.*(SHIP|HOLD).*/\1/')"
   rm -f "$output"
 
+  if [ -z "$verdict" ]; then
+    cat >&2 <<EOF
+
+[ensemble] the review ended without a SHIP or HOLD verdict — push refused.
+[ensemble] Unreadable is not clean. Read it yourself, then:
+[ensemble]   re-run:  ensemble review $selector
+[ensemble]   or push: ENSEMBLE_REVIEW=0 git push
+EOF
+    return 1
+  fi
+
+  if [ "$findings" -eq 0 ] && [ "$verdict" = SHIP ]; then
+    echo "[ensemble] review clean (VERDICT: SHIP) — pushing." >&2
+    return 0
+  fi
+
   if [ -t 1 ] && [ -e /dev/tty ]; then
-    printf '\n[ensemble] review found issues. push anyway? [y/N] ' >&2
+    printf '\n[ensemble] review says %s. push anyway? [y/N] ' \
+      "$([ "$findings" -eq 1 ] && echo "there are findings" || echo "HOLD")" >&2
     read -r reply </dev/tty
     case "$reply" in
       y | Y | yes | YES) return 0 ;;
@@ -89,7 +143,7 @@ EOF
 
   cat >&2 <<EOF
 
-[ensemble] review found issues and there is no terminal to confirm on — push refused.
+[ensemble] review did not pass and there is no terminal to confirm on — push refused.
 [ensemble] Fix them, or push deliberately with:  ENSEMBLE_REVIEW=0 git push
 EOF
   return 1

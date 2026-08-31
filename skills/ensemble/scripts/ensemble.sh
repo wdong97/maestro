@@ -69,7 +69,7 @@ claude_cmd() {
 # $4=workdir $5=outfile  (trailing '-' = read stdin)
 codex_cmd() {
   case "$2" in *[!A-Za-z0-9._:-]*) die "invalid model name: $2";; esac
-  local sb; [ "$1" = rw ] && sb="--sandbox workspace-write --full-auto" || sb="--sandbox read-only"
+  local sb; [ "$1" = rw ] && sb="--sandbox workspace-write" || sb="--sandbox read-only"
   local m=""; [ -n "$2" ] && m="-m $2"
   printf "codex exec -C %q --skip-git-repo-check %s %s -c model_reasoning_effort=%q -o %q -" \
     "$4" "$sb" "$m" "\"$3\"" "$5"
@@ -281,7 +281,9 @@ cmd_review() {
       || codex exec -C "$root" --skip-git-repo-check --sandbox read-only $mopt \
            -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" - >>"$dir/codex.log" 2>&1 <<EOF
 Review this diff read-only for correctness bugs, security issues, and risky changes.
-Be specific (file:line), rank by severity, end with a SHIP or HOLD verdict.
+Be specific (file:line), rank findings by severity as "- [P1] ...", "- [P2] ...".
+End your output with one final line, exactly: VERDICT: SHIP   (or VERDICT: HOLD)
+That line is parsed by the push gate — without it the push is refused.
 
 $(cat "$diff")
 EOF
@@ -292,7 +294,9 @@ EOF
     claude -p --permission-mode plan --add-dir "$root" --output-format text <<EOF | tee "$dir/claude.out"
 You are reviewing a pending push, read-only. Review this diff for correctness bugs,
 security issues, regressions, and risky changes. Rank findings by severity with
-file:line refs; end with SHIP or HOLD.
+file:line refs, written as "- [P1] ...", "- [P2] ...".
+End your output with one final line, exactly: VERDICT: SHIP   (or VERDICT: HOLD)
+That line is parsed by the push gate — without it the push is refused.
 
 $(cat "$diff")
 EOF
@@ -354,7 +358,6 @@ cmd_clean() {
 
 cmd_install_hook() {
   local scope="repo"; [ "${1:-}" = --global ] && scope="global"
-  local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensemble.sh"
   local hookfile
   if [ "$scope" = global ]; then
     local hp="$HOME/.config/git/hooks"; mkdir -p "$hp"
@@ -363,28 +366,14 @@ cmd_install_hook() {
     local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || die "not in a git repo"
     mkdir -p "$gd/hooks"; hookfile="$gd/hooks/pre-push"
   fi
-  cat >"$hookfile" <<EOF
-#!/usr/bin/env bash
-# Auto-installed by ensemble: peer-review the push before it goes out.
-# Bypass once with:  ENSEMBLE_REVIEW=0 git push     reviewer: ENSEMBLE_REVIEWER=claude|codex|both
-if [ "\${ENSEMBLE_REVIEW:-1}" != 0 ]; then
-  UP="\$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)"
-  SEL="--uncommitted"; [ -n "\$UP" ] && SEL="--base \$UP"
-  echo "[ensemble] peer-reviewing push (\$SEL)..." >&2
-  "$self" review \$SEL --by "\${ENSEMBLE_REVIEWER:-codex}" 1>&2
-  if [ -t 1 ] && [ -e /dev/tty ]; then
-    printf '\\n[ensemble] push anyway? [y/N] ' >&2; read -r a </dev/tty
-    case "\$a" in y|Y|yes) :;; *) echo "[ensemble] push aborted." >&2; exit 1;; esac
-  fi
-fi
-# Chain to a repo-local classic hook if one exists (so global install never
-# silently disables a repo's own pre-push). Guarded against calling itself.
-CLASSIC="\$(git rev-parse --absolute-git-dir 2>/dev/null)/hooks/pre-push"
-SELF_RP="\$(readlink -f "\$0" 2>/dev/null || echo "\$0")"
-CLASSIC_RP="\$(readlink -f "\$CLASSIC" 2>/dev/null || echo "\$CLASSIC")"
-if [ -x "\$CLASSIC" ] && [ "\$CLASSIC_RP" != "\$SELF_RP" ]; then exec "\$CLASSIC" "\$@"; fi
-exit 0
-EOF
+  # Install the canonical hook rather than a copy of it: an embedded duplicate drifts
+  # from hooks/pre-push, and on 27 Aug 2026 it did — this path was still handing out the
+  # fail-open version months after the real hook was fixed.
+  local repo canonical
+  repo="$(cd "$(dirname "$(_realpath "${BASH_SOURCE[0]}")")/../../.." 2>/dev/null && pwd)"
+  canonical="$repo/hooks/pre-push"
+  [ -f "$canonical" ] || die "can't find the maestro hook at $canonical — re-run install.sh from the repo"
+  ln -sfn "$canonical" "$hookfile" 2>/dev/null || cp "$canonical" "$hookfile"
   chmod +x "$hookfile"
   echo "[ensemble] pre-push review hook installed ($scope): $hookfile"
   echo "[ensemble]   bypass once: ENSEMBLE_REVIEW=0 git push   |  reviewer env: ENSEMBLE_REVIEWER=claude|codex|both"
