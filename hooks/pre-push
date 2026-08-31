@@ -32,14 +32,19 @@ ensemble_with_timeout() {
   local budget="$1"; shift
   if command -v timeout >/dev/null 2>&1; then timeout "$budget" "$@"; return $?; fi
   if command -v gtimeout >/dev/null 2>&1; then gtimeout "$budget" "$@"; return $?; fi
+  # Job control gives the child its own process group, so the whole tree can be
+  # signalled: `ensemble` spawns codex/claude, and killing the shell alone would
+  # leave those running and billing after we have given up on them.
   local pid waited=0
+  set -m
   "$@" &
   pid=$!
+  set +m
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$waited" -ge "$budget" ]; then
-      kill -TERM "$pid" 2>/dev/null
+      kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
       sleep 2
-      kill -KILL "$pid" 2>/dev/null
+      kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
       return 124
     fi
