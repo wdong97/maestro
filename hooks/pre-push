@@ -60,11 +60,14 @@ ensemble_with_timeout() {
 # than guessing from @{u}: on a branch's first push there IS no upstream, and the old
 # guess fell back to "--uncommitted" — reviewing the working tree, i.e. nothing, while
 # real commits went out behind it.
+# Returns: 0 + the base sha on stdout | 2 = nothing to review (only deletions) |
+#          1 = could not tell, caller falls back.
 ensemble_push_base() {
   local refs="$1" zero=0000000000000000000000000000000000000000
-  local lref lsha rref rsha origin_head
+  local lref lsha rref rsha origin_head saw_any=0
   while read -r lref lsha rref rsha; do
     [ -n "${lsha:-}" ] || continue
+    saw_any=1
     [ "$lsha" = "$zero" ] && continue                   # deleting a ref: nothing to review
     if [ -n "${rsha:-}" ] && [ "$rsha" != "$zero" ]; then
       echo "$rsha"; return 0                            # they have this ref: diff from it
@@ -76,6 +79,9 @@ ensemble_push_base() {
   done <<REFS
 $refs
 REFS
+  # Every line was a deletion: there is no diff to review, and reviewing the local
+  # branch instead would refuse a deletion over findings that have nothing to do with it.
+  [ "$saw_any" = 1 ] && return 2
   return 1
 }
 
@@ -85,8 +91,12 @@ ensemble_review_gate() {
     return 0
   fi
 
-  local upstream selector budget output status reply base
-  base="$(ensemble_push_base "${ENSEMBLE_PUSH_REFS:-}")"
+  local upstream selector budget output status reply base base_rc
+  base="$(ensemble_push_base "${ENSEMBLE_PUSH_REFS:-}")"; base_rc=$?
+  if [ "$base_rc" -eq 2 ]; then
+    echo "[ensemble] push deletes refs only — nothing to review." >&2
+    return 0
+  fi
   if [ -n "$base" ]; then
     selector="--base $base"
   else
