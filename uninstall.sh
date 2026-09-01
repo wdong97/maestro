@@ -32,6 +32,13 @@ sweep_root() {
 }
 if [ -f "$STATE/skill-roots" ]; then
   while IFS= read -r root; do [ -n "$root" ] && sweep_root "$root"; done <"$STATE/skill-roots"
+else
+  # Installed before skill-roots existed: sweep the roots install.sh has ever used, so a
+  # skill since deleted from the repo still gets its link removed and backup restored.
+  sweep_root "$HOME/.claude/skills"
+  sweep_root "$HOME/.codex/skills"
+  sweep_root "$HOME/.agents/skills"
+  [ -n "${CODEX_HOME:-}" ] && sweep_root "$CODEX_HOME/skills"
 fi
 sweep_root "$HOME/.claude/commands"
 

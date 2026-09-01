@@ -286,21 +286,32 @@ cmd_review() {
     *--base*)   git -C "$root" diff "${sel#--base }"...HEAD >"$diff" || prepared=0;;
     *--commit*) git -C "$root" show "${sel#--commit }" >"$diff" || prepared=0;;
     *--range*)  rangea="${sel#--range }"
-                case "$rangea" in
-                  *..*) rangeb="${rangea#*..}"; rangea="${rangea%%..*}"
-                        # Every commit's own patch, not the endpoint-to-endpoint diff: a
-                        # secret added in one commit and removed in the next cancels out
-                        # in a two-dot diff, while the commit carrying it still ships.
-                        if git -C "$root" rev-parse --verify --quiet "$rangea^{commit}" >/dev/null 2>&1; then
-                          git -C "$root" log -p --no-merges "$rangea..$rangeb" >"$diff" || prepared=0
-                        else
-                          # base is a tree (a ref with no shared history) — nothing to walk
-                          git -C "$root" diff "$rangea" "$rangeb" >"$diff" || prepared=0
-                        fi;;
-                  # "--range HEAD" would silently become `git diff HEAD HEAD` — an empty
-                  # diff, and a SHIP verdict for a range nobody meant to ask for.
-                  *)    echo "[ensemble] --range needs A..B, got '$rangea'" >&2; prepared=0;;
-                esac;;
+                rangeb="${rangea#*..}"; rangea="${rangea%%..*}"
+                if [ "$rangeb" = "$rangea" ] || [ -z "$rangea" ] || [ -z "$rangeb" ]; then
+                  # "--range HEAD", "HEAD..", "..HEAD": git would fill in the missing end
+                  # and hand back an empty range, which then reads as a clean SHIP.
+                  echo "[ensemble] --range needs both ends as A..B, got '${sel#--range }'" >&2
+                  prepared=0
+                elif ! git -C "$root" rev-parse --verify --quiet "$rangea^{commit}" >/dev/null 2>&1; then
+                  # Base is a tree, not a commit: nothing is shared with the remote, so
+                  # every commit on this ref is new. Walk them all — an endpoint diff
+                  # would let a secret added and later removed cancel itself out.
+                  git -C "$root" log -p --cc "$rangeb" >"$diff" || prepared=0
+                elif git -C "$root" merge-base --is-ancestor "$rangea" "$rangeb" 2>/dev/null; then
+                  # Ordinary fast-forward: every commit's own patch, --cc so a merge's
+                  # conflict resolution is shown rather than skipped.
+                  git -C "$root" log -p --cc "$rangea..$rangeb" >"$diff" || prepared=0
+                else
+                  # Rewind or divergence: commits are being REMOVED from the remote, and
+                  # old..new would be empty — a silently reverted security fix reading as
+                  # clean. Show both sides, and say what is happening.
+                  {
+                    echo "NOTE: this push REWRITES the remote ref. Commits marked < are being"
+                    echo "REMOVED from it, > are being added. Review the removals too."
+                    echo
+                    git -C "$root" log -p --cc --left-right --boundary "$rangea...$rangeb"
+                  } >"$diff" || prepared=0
+                fi;;
     *)          if git -C "$root" rev-parse HEAD >/dev/null 2>&1; then
                   git -C "$root" diff HEAD >"$diff" || prepared=0
                 else { git -C "$root" diff; git -C "$root" diff --cached; } >"$diff" || prepared=0; fi;;
