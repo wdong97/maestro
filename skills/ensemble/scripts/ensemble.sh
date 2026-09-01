@@ -322,17 +322,34 @@ cmd_review() {
                   git -C "$root" diff HEAD >"$diff" || prepared=0
                 else { git -C "$root" diff; git -C "$root" diff --cached; } >"$diff" || prepared=0; fi;;
   esac
-  # An annotated tag carries its own message and signature. Re-tagging the same commit
-  # leaves the commit range empty, so without this a re-signed or re-messaged tag would
-  # sail through as "nothing to review".
+  # Tag objects carry their own message and signature, and none of that shows up in a
+  # commit range: re-tagging the same commit, or replacing an annotated tag with a
+  # lightweight one, leaves the range empty and would read as "nothing to review".
+  # Walk BOTH ends, and follow nested tags to the bottom — every tag object in the chain
+  # is transferred, so every one of them is content.
+  dump_tags() {   # $1 = label, $2 = starting sha
+    local obj="$2" t target
+    while :; do
+      t="$(git -C "$root" cat-file -t "$obj" 2>/dev/null)" || return 0
+      [ "$t" = tag ] || return 0
+      echo "=== $1 tag object $obj ==="
+      git -C "$root" cat-file -p "$obj"
+      echo
+      target="$(git -C "$root" cat-file -p "$obj" 2>/dev/null | awk '/^object /{print $2; exit}')"
+      [ -n "$target" ] || return 0
+      obj="$target"
+    done
+  }
   case "$sel" in
     *--range*)
-      if [ "$(git -C "$root" cat-file -t "$rangeb" 2>/dev/null)" = tag ]; then
-        { echo "=== annotated tag object $rangeb ==="
-          git -C "$root" cat-file -p "$rangeb"
-          echo
-          cat "$diff"
-        } >"$diff.tag" && mv "$diff.tag" "$diff"
+      if { dump_tags removed "$rangea"; dump_tags added "$rangeb"; } >"$diff.tags" 2>/dev/null \
+         && [ -s "$diff.tags" ]; then
+        if cat "$diff" >>"$diff.tags" && mv "$diff.tags" "$diff"; then :; else
+          echo "[ensemble] could not attach the tag objects to the diff" >&2
+          prepared=0
+        fi
+      else
+        rm -f "$diff.tags"
       fi;;
   esac
   if [ "$prepared" = 0 ]; then

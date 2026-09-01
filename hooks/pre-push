@@ -80,8 +80,13 @@ ensemble_push_ranges() {
       # New ref over there. Ask the remote what it ACTUALLY has rather than trusting
       # refs/remotes/*, which goes stale the moment a remote is repointed or rewritten —
       # and a stale anchor silently excludes history the destination has never seen.
-      local candidate best=""
-      for candidate in $(git ls-remote --heads --tags "$remote" 2>/dev/null | awk '{print $1}'); do
+      # Ask the destination we are actually pushing to: git hands the hook the remote's
+      # push URL in $2, and .pushurl can differ from .url — anchoring on the fetch remote
+      # would exclude commits the destination has never seen. Bounded: a stalled or huge
+      # remote must not hang the hook before the review even starts.
+      local candidate best="" dest="${ENSEMBLE_PUSH_URL:-$remote}"
+      for candidate in $(ensemble_with_timeout 20 git ls-remote --heads --tags "$dest" 2>/dev/null \
+                           | awk '{print $1}' | head -n 200); do
         git cat-file -e "$candidate^{commit}" 2>/dev/null || continue   # only what we hold
         git merge-base --is-ancestor "$candidate" "$lsha" 2>/dev/null || continue
         # keep the furthest-along ancestor: the least history the remote already has
@@ -251,7 +256,8 @@ EOF
 # stdin can only be read once, and the classic hook we may chain to wants it too.
 ENSEMBLE_PUSH_REFS="$(cat)"
 ENSEMBLE_PUSH_REMOTE="${1:-origin}"
-export ENSEMBLE_PUSH_REFS ENSEMBLE_PUSH_REMOTE
+ENSEMBLE_PUSH_URL="${2:-}"          # the push destination, which may differ from .url
+export ENSEMBLE_PUSH_REFS ENSEMBLE_PUSH_REMOTE ENSEMBLE_PUSH_URL
 
 if [ "${ENSEMBLE_REVIEW:-1}" != 0 ]; then
   ensemble_review_gate || exit 1
