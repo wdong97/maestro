@@ -77,8 +77,11 @@ done
 # Record the roots we linked into. CODEX_HOME can differ between install and uninstall
 # (it is an env var), and an uninstall that guesses leaves symlinks and backups behind.
 mkdir -p "$STATE"
-printf '%s\n' "$CLAUDE/skills" "$CODEX/skills" "$CODEX_PLAIN/skills" "$AGENTS/skills" \
-  | awk '!seen[$0]++' >"$STATE/skill-roots"
+# Merge, never overwrite: reinstalling under a different CODEX_HOME must not make the
+# previous root unknown to uninstall.
+{ [ -f "$STATE/skill-roots" ] && cat "$STATE/skill-roots"
+  printf '%s\n' "$CLAUDE/skills" "$CODEX/skills" "$CODEX_PLAIN/skills" "$AGENTS/skills"
+} | awk 'NF && !seen[$0]++' >"$STATE/skill-roots.tmp" && mv "$STATE/skill-roots.tmp" "$STATE/skill-roots"
 note "state $STATE/skill-roots (roots to clean on uninstall)"
 
 echo "[commands] -> ~/.claude/commands (Claude slash commands)"

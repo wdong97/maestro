@@ -288,7 +288,15 @@ cmd_review() {
     *--range*)  rangea="${sel#--range }"
                 case "$rangea" in
                   *..*) rangeb="${rangea#*..}"; rangea="${rangea%%..*}"
-                        git -C "$root" diff "$rangea" "$rangeb" >"$diff" || prepared=0;;
+                        # Every commit's own patch, not the endpoint-to-endpoint diff: a
+                        # secret added in one commit and removed in the next cancels out
+                        # in a two-dot diff, while the commit carrying it still ships.
+                        if git -C "$root" rev-parse --verify --quiet "$rangea^{commit}" >/dev/null 2>&1; then
+                          git -C "$root" log -p --no-merges "$rangea..$rangeb" >"$diff" || prepared=0
+                        else
+                          # base is a tree (a ref with no shared history) — nothing to walk
+                          git -C "$root" diff "$rangea" "$rangeb" >"$diff" || prepared=0
+                        fi;;
                   # "--range HEAD" would silently become `git diff HEAD HEAD` — an empty
                   # diff, and a SHIP verdict for a range nobody meant to ask for.
                   *)    echo "[ensemble] --range needs A..B, got '$rangea'" >&2; prepared=0;;

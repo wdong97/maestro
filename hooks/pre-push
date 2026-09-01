@@ -64,8 +64,11 @@ ensemble_with_timeout() {
 #   0 = ranges on stdout | 2 = only deletions, nothing to review | 1 = could not tell
 ensemble_push_ranges() {
   local refs="$1" remote="${2:-origin}"
-  local zero=0000000000000000000000000000000000000000
-  local empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904   # git's canonical empty tree
+  # Derive both ids from the repo instead of hardcoding SHA-1 constants: a SHA-256 repo
+  # has longer ids, and the empty tree must actually exist here for `git diff` to use it.
+  local empty_tree zero
+  empty_tree="$(git hash-object -w -t tree /dev/null 2>/dev/null)"
+  zero="$(printf '%s' "${empty_tree:-0000000000000000000000000000000000000000}" | tr '[:alnum:]' '0')"
   local lref lsha rref rsha base saw_any=0 emitted=0
   while read -r lref lsha rref rsha; do
     [ -n "${lsha:-}" ] || continue
@@ -93,13 +96,30 @@ REFS
   return 1
 }
 
+# Count the standalone verdict lines in one reviewer run, per reviewer section.
+# Prints "<verdicts> <holds>". A verdict is a line of its own — reviews of this hook
+# quote "VERDICT: HOLD" mid-sentence, and prose about a verdict is not a verdict.
+# Within a section the last one wins, so a reviewer that thinks aloud is read by its
+# conclusion.
+ensemble_count_verdicts() {
+  awk '
+    { up = toupper($0) }
+    up ~ /^=+[[:space:]]*(CODEX|CLAUDE)[[:space:]]+REVIEW/ { sec++; next }
+    up ~ /^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$/ {
+      v = up; sub(/^[[:space:]]*VERDICT:[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
+      seen[sec ? sec : 1] = v }
+    END { n = 0; hold = 0
+          for (i in seen) { n++; if (seen[i] == "HOLD") hold++ }
+          printf "%d %d\n", n, hold }' "$1"
+}
+
 ensemble_review_gate() {
   if ! command -v ensemble >/dev/null 2>&1; then
     echo "[ensemble] 'ensemble' not on PATH — skipping review (run maestro install.sh)" >&2
     return 0
   fi
 
-  local upstream selectors budget output status reply ranges ranges_rc reviewer nsel
+  local upstream selectors budget output status reply ranges ranges_rc reviewer
   ranges="$(ensemble_push_ranges "${ENSEMBLE_PUSH_REFS:-}" "${ENSEMBLE_PUSH_REMOTE:-origin}")"
   ranges_rc=$?
   if [ "$ranges_rc" -eq 2 ]; then
@@ -113,7 +133,6 @@ ensemble_review_gate() {
     selectors="--uncommitted"
     [ -n "$upstream" ] && selectors="--base $upstream"
   fi
-  nsel="$(printf '%s\n' "$selectors" | grep -c .)"
   budget="${ENSEMBLE_REVIEW_TIMEOUT:-600}"
   reviewer="${ENSEMBLE_REVIEWER:-codex}"
   if ! output="$(mktemp -t ensemble-review.XXXXXX)"; then
@@ -125,17 +144,31 @@ EOF
     return 1
   fi
 
-  # Every pushed ref gets its own review; one clean branch must not vouch for another.
+  # Every pushed ref gets its own review, and each is judged ON ITS OWN. Counting
+  # verdicts across the whole file lets a chatty review of one range cover for another
+  # that never ran.
   : >"$output"
   status=0
-  local one
+  local one chunk per_call chunk_counts n h short=0 findings=0 held=0
+  per_call=1; [ "$reviewer" = both ] && per_call=2
   while IFS= read -r one; do
     [ -n "$one" ] || continue
     echo "[ensemble] peer-reviewing push ($one, up to ${budget}s)..." >&2
+    if ! chunk="$(mktemp -t ensemble-review-part.XXXXXX)"; then short=1; break; fi
     # shellcheck disable=SC2086  # the selector is deliberately two words
-    ensemble_with_timeout "$budget" ensemble review $one --by "$reviewer" >>"$output" 2>&1
+    ensemble_with_timeout "$budget" ensemble review $one --by "$reviewer" >"$chunk" 2>&1
     status=$?
-    [ "$status" -eq 124 ] && break
+    cat "$chunk" >>"$output"
+    if [ "$status" -eq 124 ]; then rm -f "$chunk"; break; fi
+    chunk_counts="$(ensemble_count_verdicts "$chunk")"
+    n="${chunk_counts%% *}"; h="${chunk_counts##* }"
+    if [ "$n" -lt "$per_call" ]; then
+      echo "[ensemble] $one answered with $n of $per_call verdict(s)" >&2
+      short=1
+    fi
+    [ "$h" -gt 0 ] && held=1
+    grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$chunk" && findings=1
+    rm -f "$chunk"
   done <<SELECTORS
 $selectors
 SELECTORS
@@ -154,43 +187,17 @@ EOF
     return 1
   fi
 
-  # Two independent signals, and BOTH must say clean:
-  #   findings  — "- [P1] ...", "- [P2] ..."; any marker means there is something to fix
-  #   verdict   — the reviewer's own "VERDICT: SHIP" / "VERDICT: HOLD" closing line
-  # A reviewer that emits neither has told us nothing (a `claude` review that skipped the
-  # format, a truncated run, an error page). Silence read as approval is exactly the
-  # failure this gate exists to stop, so no verdict = refuse.
-  # --by both puts two reviews in one file, and each one must answer for itself:
-  #   - every requested reviewer has to leave a verdict; one that crashed or rambled
-  #     has said nothing, and the other's SHIP does not speak for it
-  #   - any HOLD beats any SHIP; a reviewer does not stop objecting because the one
-  #     after it was happy
-  #
-  # A verdict counts only as a line of its own — reviews of this very hook quote
-  # "VERDICT: HOLD" mid-sentence, and prose about a verdict is not a verdict. Within a
-  # section the last standalone line wins, so a reviewer that thinks aloud and then
-  # concludes is read by its conclusion.
-  local findings held expected verdicts counts
-  findings=0
-  grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$output" && findings=1
-  # one verdict per reviewer per range reviewed
-  expected="$nsel"; [ "$reviewer" = both ] && expected=$((nsel * 2))
-  counts="$(awk '
-    { up = toupper($0) }
-    up ~ /^=+[[:space:]]*(CODEX|CLAUDE)[[:space:]]+REVIEW/ { sec++; next }
-    up ~ /^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$/ {
-      v = up; sub(/^[[:space:]]*VERDICT:[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
-      seen[sec ? sec : 1] = v }
-    END { n = 0; hold = 0
-          for (i in seen) { n++; if (seen[i] == "HOLD") hold++ }
-          printf "%d %d\n", n, hold }' "$output")"
-  verdicts="${counts%% *}"; held="${counts##* }"
+  # Each range answered for itself above. What is left is to act on the tally:
+  #   short    — some range produced fewer verdicts than reviewers asked; unreadable,
+  #              and unreadable is not clean
+  #   held     — a reviewer said HOLD; any HOLD beats every SHIP
+  #   findings — a "[P#]" marker anywhere means there is something to fix
   rm -f "$output"
 
-  if [ "$verdicts" -lt "$expected" ]; then
+  if [ "$short" -eq 1 ]; then
     cat >&2 <<EOF
 
-[ensemble] expected $expected verdict(s) for $nsel range(s), got $verdicts — push refused.
+[ensemble] a pushed range came back without a verdict from every reviewer — push refused.
 [ensemble] A reviewer that answered nothing has not approved anything.
 [ensemble]   re-run:  ensemble review --base ${ENSEMBLE_PUSH_REMOTE:-origin}/HEAD
 [ensemble]   or push: ENSEMBLE_REVIEW=0 git push

@@ -19,6 +19,22 @@ unlink_if_ours() {
   fi
 }
 
+# Sweep the roots install.sh recorded for anything pointing into this repo. Walking
+# only the skills that still EXIST here would strand links for skills since renamed or
+# removed — and their displaced .maestro-bak files with them.
+sweep_root() {
+  local root="$1" entry
+  [ -d "$root" ] || return 0
+  for entry in "$root"/* "$root"/.[!.]*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    unlink_if_ours "$entry"
+  done
+}
+if [ -f "$STATE/skill-roots" ]; then
+  while IFS= read -r root; do [ -n "$root" ] && sweep_root "$root"; done <"$STATE/skill-roots"
+fi
+sweep_root "$HOME/.claude/commands"
+
 for d in "$REPO"/skills/*/; do
   name="$(basename "$d")"
   # Clean the roots install.sh recorded, not the ones this shell happens to point at:
