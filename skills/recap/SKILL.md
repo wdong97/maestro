@@ -1,113 +1,132 @@
 ---
 name: recap
-description: Refresh everything that may have gone stale — the PR, the jobs you started, the CI run, the threads the user linked — then report four things: the goal in the words of whoever asked, where things actually stand and what the evidence is, what's blocked on a person versus blocked on something technical, and next steps each marked as yours or theirs. Starts no new work. Use when the user asks for a recap, a re-sync, where things stand now, an update after time has passed, or a briefing before a meeting or handoff.
+description: Say where a session stands — the session-level goal stated in your own words and cited to the user's, then what's done, in progress, blocked on a person, blocked on something technical, and what happens next, each step owned. Refreshes anything that may have gone stale first (PR, CI, jobs, linked threads) and starts no new work. Use when the user asks for a recap, a status, a progress check, where are we, how far along are we, what have we done so far, an update after time away, or a briefing before a meeting or handoff.
 ---
 
-# recap — refresh the world, then report four things
+# recap — where the session stands, and what it's waiting on
 
-A recap is for coming back after time has passed. Things you last looked at are now
-stale: the PR got a review, the job finished, CI went red, someone answered in the
-thread. **Refresh first, then report.** A recap built from memory is the exact failure
-this skill exists to prevent.
+Readable in fifteen seconds. Not a summary of the conversation, not a plan, not a
+wrap-up. It reports and stops.
 
-## Step 1 — Refresh (a minute or two, no more)
+## 1. Refresh what could be stale (a minute at most)
 
-Re-check anything whose state lives outside this conversation. Read-only, in parallel:
+Anything whose state lives outside this conversation has moved since you last looked.
+Re-check it first, read-only, in parallel:
 
 - **The PR** — `gh pr view <n> --json state,mergeable,reviewDecision,statusCheckRollup`,
   `gh pr checks <n>`. New reviews? Checks flipped? Conflicts now?
-- **Jobs you started** — `ensemble jobs`, the run's log or `out.txt`, any background task
-  still open, any process you left running.
+- **Jobs you started** — `ensemble jobs`, the run's log, any background task still open.
 - **CI / deploys** — the run for *this* commit, not the one you remember.
-- **The branch** — `git fetch`, then `git status -sb` and `git log --oneline origin/main..HEAD`.
-  Has the base moved under you?
-- **Threads the user linked** — re-read them (Slack, issue, PR comments) for answers that
-  arrived while you were away. If your runtime can't reach one, that's a line in the
-  report, not a guess.
-- **The files** — `git status`, and the artifacts you claimed to produce.
+- **The branch** — `git fetch`, then `git status -sb` and `git log --oneline @{u}..HEAD`.
+- **Threads the user linked** — answers may have arrived while you were away. If your
+  runtime can't reach one, that's a line in the report, not a guess.
+- **The files** — `git status`, and the artifacts you claim to have produced.
 
-Time-box it. Refresh is a scan, not an investigation — if something needs digging, that's
-a finding for the report, not work to do now. Say plainly what you could not refresh and
-why (no access, no network, not connected).
+Scale this to what's actually in play. Nothing outside the session? Say so in half a line
+and move on — then this is just a fast checkpoint. Never turn refresh into an
+investigation: something that needs digging is a finding for the report, not work to do.
 
-## Step 2 — Report exactly four things
+## 2. The goal — your sentence, their words as the citation
 
-### 1. The goal, in their words
+**State the session-level goal in your own words**, as one sentence: what this session is
+actually for, at the altitude of an outcome. Then cite the user's own words as the
+evidence for that reading — short fragments, quoted, in parentheses.
 
-Quote the person who asked, near-verbatim. Not your restatement, not what the work turned
-into. If several people asked for different things, list each with their name. If it
-changed mid-flight, give the current one and what it replaced.
+Never lead with the raw quote. A transcript line is what they typed at one moment; the
+goal is the through-line across everything they've asked, and naming it is your job. The
+citation is there so they can check your reading against what they actually said.
 
-### 2. Where things actually stand — with the evidence
+> **Goal:** make the push gate fail closed on every path, and get both agents seeing the
+> same skills. *(from "ok please fix" and "make sure codex has access to all these skills")*
 
-One line per item: the claim, then what proves it, then how fresh that proof is.
+Rules for the sentence:
 
-**Unit tests passing does not count as proven.** Nor does a clean type-check, a local
-run, a green diff, or your own earlier message. Those show the code is *plausible*.
+- One outcome, not a task list. "Support can export without engineering", not "add a
+  route, raise the limit, write tests".
+- Their words govern. If your sentence and the quotes don't sit comfortably together,
+  the quotes are right and the sentence is wrong — rewrite it.
+- Cite two or three fragments at most, and don't stitch them into something nobody said.
+- The goal moved? Say what it is now and what it replaced, in the same sentence.
+- Genuinely no single goal? Say that. A session that wandered is a fact, not a gap to fill.
 
-Proof is the real thing working in the real place:
+## 3. Where it stands — the list, with evidence
 
-- CI green on **this** commit (name the run and when).
-- The endpoint answered in staging; the job completed; the file exists where it should.
-- A person looked and said so — approved the PR, confirmed in the thread.
-- The artifact is where the user will look for it: pushed, merged, deployed, published.
+Bold status word, one plain-English line, newest-relevant first. Drop any status with no
+items; keep the whole thing on one screen.
 
-Anything short of that is **not proven** — say so in those words, and say what would
-settle it. Never write "should work."
+```
+- **Done** — <what it is, where it lives, and what proves it>
+- **In progress** — <what's half-built, and what's missing>
+- **Not started** — <in scope, untouched>
+- **Dropped** — <cut, and why: they said no, or a pivot replaced it>
+- **Not proven** — <believed done, no evidence yet; what would settle it>
+```
 
-### 3. Blocked on a person vs blocked on something technical
+**Passing unit tests is not proof.** Nor is a clean type-check, a local run, a green
+diff, or your own earlier message — those show the code is *plausible*. Proof is the real
+thing working where it will be used: CI green on **this** commit, the endpoint answering
+in staging, the job completing, a person confirming, the artifact where the user will
+look for it. Anything short of that is **Not proven**, in those words, with what would
+settle it. Never write "should work". If tests never ran, say tests never ran.
 
-Two separate lists; the difference decides what happens next.
+## 4. Blocked on a person vs blocked on something technical
 
-- **Waiting on a person** — name who, what you need from them, how long it has waited,
-  and whether they've been asked yet. "Nobody has actually been asked" is the most common
-  and most useful thing a recap surfaces.
-- **Blocked on something technical** — what's broken, the error, what you already tried,
-  and what you'd try next. No fix now; this is a description.
+Two lists, because the difference decides what happens next.
 
-If nothing is blocked, say "nothing blocked" — don't manufacture entries.
+- **Waiting on a person** — who, what you need, how long it's waited, and **whether
+  they've actually been asked**. "Nobody has been asked yet" is the most useful thing a
+  recap surfaces.
+- **Blocked technically** — what's broken, the error, what you already tried, what you'd
+  try next. A description, not a fix.
 
-### 4. Next steps, each owned
+Nothing blocked? Say "nothing blocked" — don't manufacture entries.
 
-Short list, ordered by what happens first. Tag every line **[me]** (the agent writing the
-recap) or **[you]** — or a named person when it's someone else's. No line without an
-owner. If a step can't start until something in
-list 3 clears, say which.
+## 5. What happens next, each step owned
 
-## The one hard rule
+Short, ordered by what comes first, every line tagged **[me]** (the agent writing this)
+or **[you]** — or a named person. No line without an owner. If a step can't start until
+something in §4 clears, say which.
 
-**A recap starts no new work.** No fixes, no commits, no pushes, no merges, no "while I
-was in there." Read-only commands only: `gh pr view` yes, `gh pr merge` no. Find a bug
-mid-refresh? It goes in the report. The next step is the user's to approve — that's the
-whole point of stopping here.
+Then stop. **A recap starts no new work**: no fixes, no commits, no pushes, no merges, no
+"while I was in there". Read-only commands only — `gh pr view` yes, `gh pr merge` no. A
+bug found while refreshing is a line in the report. The next move is the user's.
 
-Everything above is agent-neutral: `git`, `gh`, and `ensemble` behave the same from any
-session, and the report never assumes which model wrote it. Run it from Claude or Codex.
+## Rules
+
+- Check, don't remember. Your own earlier messages are not evidence.
+- One line per item; if it needs two, it's two items or it's too much detail.
+- Planning, reading, and explaining are not items. Only things that changed something.
+- Don't grade generously: half-built is *in progress*, unrun tests are not *done*.
+- Failures get their own line, said plainly.
+- No closing question, no menu of options. If the user was mid-task, they carry on.
 
 ## When another skill fits better
 
-- Cheap mid-session checkpoint, nothing external to refresh → `status`.
-- Ending the session and clearing leftovers → `closeout`.
-- What's outstanding across the whole repo, not this thread → `catch-up`.
+- Ending the session and clearing leftovers with approval → `closeout`.
+- What's outstanding across the whole repo rather than this thread → `catch-up`.
+- Explaining what something *is* rather than where it stands → `eli5`.
 
 ## Example
 
-> **Goal — in your words:** "get the export endpoint behind the feature flag so support
-> can try it Monday without a deploy."
+> **Goal:** get the nightly import running unattended so nobody is woken by it.
+> *(from "it keeps dying at 3am" and "I don't want to babysit this")*
 >
-> **Where it stands**
-> - Endpoint merged — PR #412, merged 2h ago, CI green on `a91f30c`. Proven.
-> - Flag wired up — unit tests pass, but it has never run with the flag off in staging.
->   **Not proven.** A staging request with `EXPORT_V2=0` would settle it.
-> - Row-limit bump — pushed to `feat/export`, no CI run yet. Not proven.
+> Refreshed: PR #218, CI on `a91f30c`, last night's run log. Nothing else external.
+>
+> - **Done** — retry-on-timeout, `jobs/import.py:88`. Proven: last night's run recovered
+>   on its own, no page.
+> - **Done** — alerts go to #ops instead of email. Proven: test alert landed there.
+> - **In progress** — dedupe pass runs but takes ~4 min on the 2 GB sample.
+> - **Not proven** — the 6h-timeout path. Unit tests pass; it has never run for 6 hours.
+> - **Dropped** — moving to Airflow; you said not this quarter.
 >
 > **Waiting on a person**
-> - Staging deploy — needs your approval in #ops. Asked 40 min ago, no reply yet.
+> - Staging deploy needs your approval in #ops. Asked 40 min ago, no reply.
 >
 > **Blocked technically**
 > - Nothing.
 >
-> **Next steps**
-> 1. [you] Approve the staging deploy, or tell me to ask someone else.
-> 2. [me] Once it's up, run the flag-off request and report the result.
-> 3. [me] Re-run CI on `feat/export` — blocked until the deploy lands.
+> **Next**
+> 1. [you] Approve the deploy, or tell me to ask someone else.
+> 2. [me] Once it's up, run the 6h path overnight and report what happened.
+> 3. [me] Profile the dedupe pass — blocked until the deploy lands.

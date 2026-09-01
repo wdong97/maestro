@@ -285,8 +285,14 @@ cmd_review() {
   case "$sel" in
     *--base*)   git -C "$root" diff "${sel#--base }"...HEAD >"$diff" || prepared=0;;
     *--commit*) git -C "$root" show "${sel#--commit }" >"$diff" || prepared=0;;
-    *--range*)  rangea="${sel#--range }"; rangeb="${rangea#*..}"; rangea="${rangea%%..*}"
-                git -C "$root" diff "$rangea" "$rangeb" >"$diff" || prepared=0;;
+    *--range*)  rangea="${sel#--range }"
+                case "$rangea" in
+                  *..*) rangeb="${rangea#*..}"; rangea="${rangea%%..*}"
+                        git -C "$root" diff "$rangea" "$rangeb" >"$diff" || prepared=0;;
+                  # "--range HEAD" would silently become `git diff HEAD HEAD` — an empty
+                  # diff, and a SHIP verdict for a range nobody meant to ask for.
+                  *)    echo "[ensemble] --range needs A..B, got '$rangea'" >&2; prepared=0;;
+                esac;;
     *)          if git -C "$root" rev-parse HEAD >/dev/null 2>&1; then
                   git -C "$root" diff HEAD >"$diff" || prepared=0
                 else { git -C "$root" diff; git -C "$root" diff --cached; } >"$diff" || prepared=0; fi;;
@@ -314,6 +320,10 @@ cmd_review() {
   # The leading newline matters: reviewer output often has no trailing newline, and a
   # verdict glued to the end of the last finding is not a line the gate can see.
   emit_verdict() {   # $1 = reviewer output file, $2 = its exit status, $3 = derive|require
+    # Reviewer output routinely ends without a newline. Close the line before anything
+    # else prints, or the verdict — the reviewer's own or ours — ends up sharing a line
+    # with whatever comes next and stops being the standalone line the gate looks for.
+    [ -s "$1" ] && [ -n "$(tail -c1 "$1" 2>/dev/null)" ] && echo
     # Exit status first: a reviewer that printed SHIP and then died (API drop, truncated
     # write) has approved nothing, and its own verdict must not be trusted.
     if [ "$2" -ne 0 ] || [ ! -s "$1" ]; then printf '\nVERDICT: HOLD\n'; return; fi
