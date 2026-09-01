@@ -19,7 +19,8 @@ git clone https://github.com/wdong97/maestro.git ~/maestro
 cd ~/maestro && ./install.sh
 ```
 
-That symlinks the repo into `~/.claude`, `~/.codex`, `~/.local/bin`, and your git hooks,
+That symlinks the repo into `~/.claude`, `~/.codex` (and `$CODEX_HOME`, plus the shared
+`~/.agents` root some agents read instead), `~/.local/bin`, and your git hooks,
 then runs `ensemble doctor` for you — expect `0 fail`. It also sets git's global
 `core.hooksPath` so every repo gets the pre-push review; `./install.sh --no-hook` skips
 that and touches no git config, and `./uninstall.sh` puts it back exactly as it was.

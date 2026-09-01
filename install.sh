@@ -7,7 +7,12 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE="$HOME/.claude"
-CODEX="$HOME/.codex"
+# Codex reads CODEX_HOME when it is set — on some setups (orca, sandboxes, CI) that is
+# NOT ~/.codex, and linking only into ~/.codex leaves Codex seeing none of these skills.
+CODEX="${CODEX_HOME:-$HOME/.codex}"
+CODEX_PLAIN="$HOME/.codex"
+# The cross-agent root: any agent that follows the ~/.agents convention reads from here.
+AGENTS="$HOME/.agents"
 BIN="$HOME/.local/bin"
 GITHOOKS="$HOME/.config/git/hooks"
 STATE="$HOME/.config/maestro"
@@ -58,12 +63,17 @@ ensure_import() {
 
 echo "maestro install from: $REPO"
 
-echo "[skills] -> ~/.claude/skills and ~/.codex/skills"
+echo "[skills] -> claude, codex, and the shared ~/.agents root"
 for d in "$REPO"/skills/*/; do
   name="$(basename "$d")"
   link "$d" "$CLAUDE/skills/$name"
   link "$d" "$CODEX/skills/$name"
+  # when CODEX_HOME points elsewhere, cover plain ~/.codex too, so the skills are there
+  # whether or not that variable is set in the shell that runs the agent
+  [ "$CODEX" = "$CODEX_PLAIN" ] || link "$d" "$CODEX_PLAIN/skills/$name"
+  link "$d" "$AGENTS/skills/$name"
 done
+[ "$CODEX" = "$CODEX_PLAIN" ] || note "note  CODEX_HOME=$CODEX (linked there as well as ~/.codex)"
 
 echo "[commands] -> ~/.claude/commands (Claude slash commands)"
 for f in "$REPO"/commands/*.md; do link "$f" "$CLAUDE/commands/$(basename "$f")"; done
@@ -80,9 +90,9 @@ fi
 
 echo "[guidelines] -> both homes + @import"
 link "$REPO/guidelines/coding-guidelines.md" "$CLAUDE/coding-guidelines.md"
-link "$REPO/guidelines/coding-guidelines.md" "$CODEX/coding-guidelines.md"
+link "$REPO/guidelines/coding-guidelines.md" "$CODEX_PLAIN/coding-guidelines.md"
 ensure_import "$CLAUDE/CLAUDE.md" "@coding-guidelines.md"
-ensure_import "$CODEX/AGENTS.md"  "@$HOME/.codex/coding-guidelines.md"
+ensure_import "$CODEX/AGENTS.md"  "@$CODEX_PLAIN/coding-guidelines.md"
 
 if [ "$WITH_HOOK" = 1 ]; then
   echo "[hook] global pre-push peer review"

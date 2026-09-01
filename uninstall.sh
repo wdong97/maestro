@@ -23,6 +23,8 @@ for d in "$REPO"/skills/*/; do
   name="$(basename "$d")"
   unlink_if_ours "$HOME/.claude/skills/$name"
   unlink_if_ours "$HOME/.codex/skills/$name"
+  unlink_if_ours "$HOME/.agents/skills/$name"
+  [ -n "${CODEX_HOME:-}" ] && unlink_if_ours "$CODEX_HOME/skills/$name"
 done
 for f in "$REPO"/commands/*.md; do unlink_if_ours "$HOME/.claude/commands/$(basename "$f")"; done
 unlink_if_ours "$HOME/.local/bin/ensemble"

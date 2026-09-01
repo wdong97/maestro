@@ -481,14 +481,22 @@ cmd_doctor() {
   [ -n "$SKILLS" ] || SKILLS="ensemble duel spawn delegate board ensemble-review ensemble-doctor"
   [ -n "$CMDS" ]   || CMDS="duel spawn ensemble-review ensemble-doctor"
   [ -f "$HOME/.claude/skills/ensemble/SKILL.md" ] || bad "missing ~/.claude/skills/ensemble/SKILL.md (the canonical skill)"
-  local s n=0 miss_c="" miss_x=""
+  # Check the roots the agents ACTUALLY read: codex follows CODEX_HOME when it is set,
+  # and ~/.agents is the shared cross-agent root. Checking only ~/.codex reported
+  # "codex sees all skills" on a machine where codex could see none of them.
+  local ch="${CODEX_HOME:-$HOME/.codex}"
+  local s n=0 miss_c="" miss_x="" miss_a=""
   for s in $SKILLS; do
     n=$((n+1))
     [ -e "$HOME/.claude/skills/$s/SKILL.md" ] || miss_c="$miss_c $s"
-    [ -e "$HOME/.codex/skills/$s/SKILL.md" ]  || miss_x="$miss_x $s"
+    [ -e "$ch/skills/$s/SKILL.md" ]           || miss_x="$miss_x $s"
+    [ -e "$HOME/.agents/skills/$s/SKILL.md" ] || miss_a="$miss_a $s"
   done
   [ -z "$miss_c" ] && ok "claude sees all $n skills" || warn "claude missing skills:$miss_c (re-run install.sh)"
-  [ -z "$miss_x" ] && ok "codex sees all $n skills"  || warn "codex missing skills:$miss_x (re-run install.sh)"
+  [ -z "$miss_x" ] && ok "codex sees all $n skills ($ch)" \
+                   || warn "codex missing skills:$miss_x in $ch (re-run install.sh)"
+  [ -z "$miss_a" ] && ok "shared ~/.agents root has all $n skills" \
+                   || warn "~/.agents missing skills:$miss_a (re-run install.sh)"
   local c miss_cmd="" have_cmd=""
   for c in $CMDS; do
     if [ -f "$HOME/.claude/commands/$c.md" ]; then have_cmd="$have_cmd /$c"; else miss_cmd="$miss_cmd /$c"; fi
