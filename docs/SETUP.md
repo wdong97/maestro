@@ -191,8 +191,10 @@ git clone https://github.com/wdong97/maestro.git ~/maestro
 cd ~/maestro && ./install.sh
 ```
 
-Pull updates anytime with `git pull` (symlinks mean no reinstall needed for edits;
-re-run `./install.sh` only after adding brand-new skills/commands).
+Pull updates anytime with `git pull`. Symlinks mean edits to existing skills are live
+immediately — but **re-run `./install.sh` after any pull that adds or removes a skill or
+command**. Adding one needs a new link; removing one leaves a dangling link behind until
+install prunes it (and restores whatever it had displaced).
 
 ---
 

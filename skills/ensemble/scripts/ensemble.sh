@@ -302,11 +302,11 @@ cmd_review() {
                   # Base resolves, but to a tree rather than a commit: nothing is shared
                   # with the remote, so every commit on this ref is new. Walk them all —
                   # an endpoint diff would let an add-then-remove cancel itself out.
-                  git -C "$root" log -p --cc "$rangeb" >"$diff" || prepared=0
+                  git -C "$root" log -p -m "$rangeb" >"$diff" || prepared=0
                 elif git -C "$root" merge-base --is-ancestor "$rangea" "$rangeb" 2>/dev/null; then
                   # Ordinary fast-forward: every commit's own patch, --cc so a merge's
                   # conflict resolution is shown rather than skipped.
-                  git -C "$root" log -p --cc "$rangea..$rangeb" >"$diff" || prepared=0
+                  git -C "$root" log -p -m "$rangea..$rangeb" >"$diff" || prepared=0
                 else
                   # Rewind or divergence: commits are being REMOVED from the remote, and
                   # old..new would be empty — a silently reverted security fix reading as
@@ -315,12 +315,25 @@ cmd_review() {
                     echo "NOTE: this push REWRITES the remote ref. Commits marked < are being"
                     echo "REMOVED from it, > are being added. Review the removals too."
                     echo
-                    git -C "$root" log -p --cc --left-right --boundary "$rangea...$rangeb"
+                    git -C "$root" log -p -m --left-right --boundary "$rangea...$rangeb"
                   } >"$diff" || prepared=0
                 fi;;
     *)          if git -C "$root" rev-parse HEAD >/dev/null 2>&1; then
                   git -C "$root" diff HEAD >"$diff" || prepared=0
                 else { git -C "$root" diff; git -C "$root" diff --cached; } >"$diff" || prepared=0; fi;;
+  esac
+  # An annotated tag carries its own message and signature. Re-tagging the same commit
+  # leaves the commit range empty, so without this a re-signed or re-messaged tag would
+  # sail through as "nothing to review".
+  case "$sel" in
+    *--range*)
+      if [ "$(git -C "$root" cat-file -t "$rangeb" 2>/dev/null)" = tag ]; then
+        { echo "=== annotated tag object $rangeb ==="
+          git -C "$root" cat-file -p "$rangeb"
+          echo
+          cat "$diff"
+        } >"$diff.tag" && mv "$diff.tag" "$diff"
+      fi;;
   esac
   if [ "$prepared" = 0 ]; then
     echo "[ensemble] could not prepare the diff for $sel — nothing was reviewed" >&2

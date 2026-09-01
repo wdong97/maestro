@@ -71,7 +71,13 @@ prune_root() {
   for entry in "$root"/*; do
     [ -L "$entry" ] || continue
     case "$(readlink "$entry")" in "$REPO"/*) ;; *) continue;; esac
-    [ -e "$entry" ] || { rm -f "$entry"; note "prune $entry (removed from the repo)"; }
+    [ -e "$entry" ] && continue
+    rm -f "$entry"; note "prune $entry (removed from the repo)"
+    # put back whatever this link displaced, or it is stranded forever: uninstall can no
+    # longer find it once our symlink is gone.
+    if [ -e "$entry.maestro-bak" ]; then
+      mv "$entry.maestro-bak" "$entry"; note "restore $entry (from backup)"
+    fi
   done
 }
 

@@ -77,14 +77,25 @@ ensemble_push_ranges() {
     if [ -n "${rsha:-}" ] && [ "$rsha" != "$zero" ]; then
       base="$rsha"                                       # they have it: review old -> new
     else
-      # New ref over there. Anchor on THIS remote — not a hardcoded origin, which does
-      # not exist when the remote is named otherwise or has nothing in it yet.
-      base="$(git symbolic-ref --quiet --short "refs/remotes/$remote/HEAD" 2>/dev/null)"
-      [ -n "$base" ] || base="$remote/main"
-      base="$(git merge-base "$lsha" "$base" 2>/dev/null)" || base=""
-      # Nothing shared with the remote at all (empty remote, unrelated history): every
-      # commit on this ref is new, so review all of it rather than nothing.
-      [ -n "$base" ] || base="$empty_tree"
+      # New ref over there. Ask the remote what it ACTUALLY has rather than trusting
+      # refs/remotes/*, which goes stale the moment a remote is repointed or rewritten —
+      # and a stale anchor silently excludes history the destination has never seen.
+      local candidate best=""
+      for candidate in $(git ls-remote --heads --tags "$remote" 2>/dev/null | awk '{print $1}'); do
+        git cat-file -e "$candidate^{commit}" 2>/dev/null || continue   # only what we hold
+        git merge-base --is-ancestor "$candidate" "$lsha" 2>/dev/null || continue
+        # keep the furthest-along ancestor: the least history the remote already has
+        if [ -z "$best" ] || git merge-base --is-ancestor "$best" "$candidate" 2>/dev/null; then
+          best="$candidate"
+        fi
+      done
+      if [ -n "$best" ]; then
+        base="$best"
+      else
+        # Could not confirm anything shared (offline, empty remote, unrelated history):
+        # review the ref's whole history. Over-reviewing is the safe direction.
+        base="$empty_tree"
+      fi
     fi
     echo "$base..$lsha"
     emitted=1
