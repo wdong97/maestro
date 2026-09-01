@@ -63,6 +63,18 @@ ensure_import() {
 
 echo "maestro install from: $REPO"
 
+# prune_root <dir> — drop symlinks into this repo whose target is gone, so a skill or
+# command deleted upstream does not survive a `git pull && ./install.sh` as a dangling link.
+prune_root() {
+  local root="$1" entry
+  [ -d "$root" ] || return 0
+  for entry in "$root"/*; do
+    [ -L "$entry" ] || continue
+    case "$(readlink "$entry")" in "$REPO"/*) ;; *) continue;; esac
+    [ -e "$entry" ] || { rm -f "$entry"; note "prune $entry (removed from the repo)"; }
+  done
+}
+
 echo "[skills] -> claude, codex, and the shared ~/.agents root"
 for d in "$REPO"/skills/*/; do
   name="$(basename "$d")"
@@ -72,6 +84,9 @@ for d in "$REPO"/skills/*/; do
   # whether or not that variable is set in the shell that runs the agent
   [ "$CODEX" = "$CODEX_PLAIN" ] || link "$d" "$CODEX_PLAIN/skills/$name"
   link "$d" "$AGENTS/skills/$name"
+done
+for root in "$CLAUDE/skills" "$CODEX/skills" "$CODEX_PLAIN/skills" "$AGENTS/skills"; do
+  prune_root "$root"
 done
 [ "$CODEX" = "$CODEX_PLAIN" ] || note "note  CODEX_HOME=$CODEX (linked there as well as ~/.codex)"
 # Record the roots we linked into. CODEX_HOME can differ between install and uninstall
@@ -86,6 +101,7 @@ note "state $STATE/skill-roots (roots to clean on uninstall)"
 
 echo "[commands] -> ~/.claude/commands (Claude slash commands)"
 for f in "$REPO"/commands/*.md; do link "$f" "$CLAUDE/commands/$(basename "$f")"; done
+prune_root "$CLAUDE/commands"
 
 echo "[cli] -> ~/.local/bin/ensemble"
 chmod +x "$REPO/skills/ensemble/scripts/ensemble.sh"

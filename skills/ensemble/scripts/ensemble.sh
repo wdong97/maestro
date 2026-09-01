@@ -292,10 +292,16 @@ cmd_review() {
                   # and hand back an empty range, which then reads as a clean SHIP.
                   echo "[ensemble] --range needs both ends as A..B, got '${sel#--range }'" >&2
                   prepared=0
+                elif ! git -C "$root" cat-file -e "$rangea" 2>/dev/null; then
+                  # The base object is not here at all — typically a forced update where
+                  # the remote's old tip was never fetched. We cannot see what is being
+                  # removed, so we cannot review it. Missing is not empty.
+                  echo "[ensemble] base $rangea is not in this repo — fetch first; nothing reviewed" >&2
+                  prepared=0
                 elif ! git -C "$root" rev-parse --verify --quiet "$rangea^{commit}" >/dev/null 2>&1; then
-                  # Base is a tree, not a commit: nothing is shared with the remote, so
-                  # every commit on this ref is new. Walk them all — an endpoint diff
-                  # would let a secret added and later removed cancel itself out.
+                  # Base resolves, but to a tree rather than a commit: nothing is shared
+                  # with the remote, so every commit on this ref is new. Walk them all —
+                  # an endpoint diff would let an add-then-remove cancel itself out.
                   git -C "$root" log -p --cc "$rangeb" >"$diff" || prepared=0
                 elif git -C "$root" merge-base --is-ancestor "$rangea" "$rangeb" 2>/dev/null; then
                   # Ordinary fast-forward: every commit's own patch, --cc so a merge's

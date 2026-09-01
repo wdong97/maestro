@@ -160,6 +160,12 @@ EOF
     status=$?
     cat "$chunk" >>"$output"
     if [ "$status" -eq 124 ]; then rm -f "$chunk"; break; fi
+    if [ "$status" -ne 0 ]; then
+      # A review that printed a verdict and then died has not reviewed anything. Its
+      # exit status outranks anything it managed to say first.
+      echo "[ensemble] $one: the review exited $status — not a completed review" >&2
+      short=1
+    fi
     chunk_counts="$(ensemble_count_verdicts "$chunk")"
     n="${chunk_counts%% *}"; h="${chunk_counts##* }"
     if [ "$n" -lt "$per_call" ]; then
