@@ -281,7 +281,7 @@ cmd_review() {
   # A diff we could not build is not an empty diff. Preparation that fails must never
   # read as "nothing to review", or a force push whose base is missing locally sails
   # through unreviewed.
-  local prepared=1 rangea rangeb
+  local prepared=1 rangea rangeb peeled
   case "$sel" in
     *--base*)   git -C "$root" diff "${sel#--base }"...HEAD >"$diff" || prepared=0;;
     *--commit*) git -C "$root" show "${sel#--commit }" >"$diff" || prepared=0;;
@@ -302,7 +302,15 @@ cmd_review() {
                   # Base resolves, but to a tree rather than a commit: nothing is shared
                   # with the remote, so every commit on this ref is new. Walk them all —
                   # an endpoint diff would let an add-then-remove cancel itself out.
-                  git -C "$root" log -p -m "$rangeb" >"$diff" || prepared=0
+                  # The tip may peel to a blob or tree (a tag on raw content). `git log`
+                  # exits 0 with nothing for those, which would read as an empty range.
+                  peeled="$(git -C "$root" rev-parse --quiet --verify "$rangeb^{}" 2>/dev/null)"
+                  if [ "$(git -C "$root" cat-file -t "${peeled:-$rangeb}" 2>/dev/null)" = commit ]; then
+                    git -C "$root" log -p -m "$rangeb" >"$diff" || prepared=0
+                  else
+                    { echo "=== transferred object ${peeled:-$rangeb} (not a commit) ==="
+                      git -C "$root" cat-file -p "${peeled:-$rangeb}"; } >"$diff" || prepared=0
+                  fi
                 elif git -C "$root" merge-base --is-ancestor "$rangea" "$rangeb" 2>/dev/null; then
                   # Ordinary fast-forward: every commit's own patch, --cc so a merge's
                   # conflict resolution is shown rather than skipped.
@@ -342,9 +350,11 @@ cmd_review() {
   }
   case "$sel" in
     *--range*)
-      if { dump_tags removed "$rangea"; dump_tags added "$rangeb"; } >"$diff.tags" 2>/dev/null \
-         && [ -s "$diff.tags" ]; then
-        if cat "$diff" >>"$diff.tags" && mv "$diff.tags" "$diff"; then :; else
+      if ! { dump_tags removed "$rangea"; dump_tags added "$rangeb"; } >"$diff.tags" 2>/dev/null; then
+        echo "[ensemble] could not collect the tag objects — nothing was reviewed" >&2
+        prepared=0
+      elif [ -s "$diff.tags" ]; then
+        if ! { cat "$diff" >>"$diff.tags" && mv "$diff.tags" "$diff"; }; then
           echo "[ensemble] could not attach the tag objects to the diff" >&2
           prepared=0
         fi

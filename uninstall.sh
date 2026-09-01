@@ -15,7 +15,9 @@ unlink_if_ours() {
   local dest="$1"
   if [ -L "$dest" ] && [[ "$(readlink -f "$dest")" == "$REPO"/* ]]; then
     rm -f "$dest"; note "rm    $dest"
-    if [ -e "$dest.maestro-bak" ]; then mv "$dest.maestro-bak" "$dest"; note "restore $dest"; fi
+    if [ -e "$dest.maestro-bak" ] || [ -L "$dest.maestro-bak" ]; then
+      mv "$dest.maestro-bak" "$dest"; note "restore $dest"
+    fi
   fi
 }
 

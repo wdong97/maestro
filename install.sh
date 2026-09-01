@@ -71,11 +71,11 @@ prune_root() {
   for entry in "$root"/*; do
     [ -L "$entry" ] || continue
     case "$(readlink "$entry")" in "$REPO"/*) ;; *) continue;; esac
-    [ -e "$entry" ] && continue
+    [ -e "$entry" ] && continue          # -e follows the link: target still exists
     rm -f "$entry"; note "prune $entry (removed from the repo)"
     # put back whatever this link displaced, or it is stranded forever: uninstall can no
     # longer find it once our symlink is gone.
-    if [ -e "$entry.maestro-bak" ]; then
+    if [ -e "$entry.maestro-bak" ] || [ -L "$entry.maestro-bak" ]; then
       mv "$entry.maestro-bak" "$entry"; note "restore $entry (from backup)"
     fi
   done
@@ -91,9 +91,11 @@ for d in "$REPO"/skills/*/; do
   [ "$CODEX" = "$CODEX_PLAIN" ] || link "$d" "$CODEX_PLAIN/skills/$name"
   link "$d" "$AGENTS/skills/$name"
 done
-for root in "$CLAUDE/skills" "$CODEX/skills" "$CODEX_PLAIN/skills" "$AGENTS/skills"; do
-  prune_root "$root"
-done
+# Prune every root we have ever installed into, not just this run's: changing CODEX_HOME
+# must not leave the previous home full of dangling links.
+{ printf '%s\n' "$CLAUDE/skills" "$CODEX/skills" "$CODEX_PLAIN/skills" "$AGENTS/skills"
+  [ -f "$STATE/skill-roots" ] && cat "$STATE/skill-roots"
+} | awk 'NF && !seen[$0]++' | while IFS= read -r root; do prune_root "$root"; done
 [ "$CODEX" = "$CODEX_PLAIN" ] || note "note  CODEX_HOME=$CODEX (linked there as well as ~/.codex)"
 # Record the roots we linked into. CODEX_HOME can differ between install and uninstall
 # (it is an env var), and an uninstall that guesses leaves symlinks and backups behind.

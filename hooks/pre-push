@@ -73,7 +73,18 @@ ensemble_push_ranges() {
   while read -r lref lsha rref rsha; do
     [ -n "${lsha:-}" ] || continue
     saw_any=1
-    [ "$lsha" = "$zero" ] && continue                    # deleting a ref: nothing to review
+    if [ "$lsha" = "$zero" ]; then
+      # Deleting a ref. A branch deletion removes no content — the commits stay reachable
+      # elsewhere or they do not, and that is a repo-policy question, not a review one.
+      # Deleting an ANNOTATED TAG is different: its message and signature go with it, and
+      # nothing else in the push carries them. Review that object before it disappears.
+      if [ -n "${rsha:-}" ] && [ "$rsha" != "$zero" ] \
+         && [ "$(git cat-file -t "$rsha" 2>/dev/null)" = tag ]; then
+        echo "--commit $rsha"
+        emitted=1
+      fi
+      continue
+    fi
     if [ -n "${rsha:-}" ] && [ "$rsha" != "$zero" ]; then
       base="$rsha"                                       # they have it: review old -> new
     else
@@ -102,7 +113,7 @@ ensemble_push_ranges() {
         base="$empty_tree"
       fi
     fi
-    echo "$base..$lsha"
+    echo "--range $base..$lsha"
     emitted=1
   done <<REFS
 $refs
@@ -143,7 +154,7 @@ ensemble_review_gate() {
     return 0
   fi
   if [ "$ranges_rc" -eq 0 ] && [ -n "$ranges" ]; then
-    selectors="$(printf '%s\n' "$ranges" | sed 's/^/--range /')"
+    selectors="$ranges"
   else
     upstream="$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)"
     selectors="--uncommitted"
