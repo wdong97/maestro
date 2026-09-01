@@ -78,10 +78,13 @@ ensemble_push_ranges() {
       # elsewhere or they do not, and that is a repo-policy question, not a review one.
       # Deleting an ANNOTATED TAG is different: its message and signature go with it, and
       # nothing else in the push carries them. Review that object before it disappears.
-      if [ -n "${rsha:-}" ] && [ "$rsha" != "$zero" ] \
-         && [ "$(git cat-file -t "$rsha" 2>/dev/null)" = tag ]; then
-        echo "--commit $rsha"
-        emitted=1
+      if [ -n "${rsha:-}" ] && [ "$rsha" != "$zero" ]; then
+        case "$(git cat-file -t "$rsha" 2>/dev/null)" in
+          tag)    echo "--commit $rsha"; emitted=1;;   # signature and message go with it
+          commit) ;;                                    # branch deletion removes no content
+          *)      # we do not hold it, so we cannot tell what is being destroyed
+                  echo "--commit $rsha"; emitted=1;;
+        esac
       fi
       continue
     fi

@@ -126,6 +126,8 @@ link "$REPO/guidelines/coding-guidelines.md" "$CLAUDE/coding-guidelines.md"
 link "$REPO/guidelines/coding-guidelines.md" "$CODEX_PLAIN/coding-guidelines.md"
 ensure_import "$CLAUDE/CLAUDE.md" "@coding-guidelines.md"
 ensure_import "$CODEX/AGENTS.md"  "@$CODEX_PLAIN/coding-guidelines.md"
+# a later session without CODEX_HOME set reads ~/.codex/AGENTS.md — it needs it too
+[ "$CODEX" = "$CODEX_PLAIN" ] || ensure_import "$CODEX_PLAIN/AGENTS.md" "@$CODEX_PLAIN/coding-guidelines.md"
 
 if [ "$WITH_HOOK" = 1 ]; then
   echo "[hook] global pre-push peer review"

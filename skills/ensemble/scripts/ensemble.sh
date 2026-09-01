@@ -303,13 +303,15 @@ cmd_review() {
                   # with the remote, so every commit on this ref is new. Walk them all —
                   # an endpoint diff would let an add-then-remove cancel itself out.
                   # The tip may peel to a blob or tree (a tag on raw content). `git log`
-                  # exits 0 with nothing for those, which would read as an empty range.
+                  # exits 0 with nothing for those, and dumping them is only half a
+                  # review — a tree lists names and ids, not the blobs it carries. We do
+                  # not pretend: anything we cannot render as commits is refused.
                   peeled="$(git -C "$root" rev-parse --quiet --verify "$rangeb^{}" 2>/dev/null)"
                   if [ "$(git -C "$root" cat-file -t "${peeled:-$rangeb}" 2>/dev/null)" = commit ]; then
                     git -C "$root" log -p -m "$rangeb" >"$diff" || prepared=0
                   else
-                    { echo "=== transferred object ${peeled:-$rangeb} (not a commit) ==="
-                      git -C "$root" cat-file -p "${peeled:-$rangeb}"; } >"$diff" || prepared=0
+                    echo "[ensemble] $rangeb points at a non-commit object — review it by hand" >&2
+                    prepared=0
                   fi
                 elif git -C "$root" merge-base --is-ancestor "$rangea" "$rangeb" 2>/dev/null; then
                   # Ordinary fast-forward: every commit's own patch, --cc so a merge's
@@ -335,23 +337,27 @@ cmd_review() {
   # lightweight one, leaves the range empty and would read as "nothing to review".
   # Walk BOTH ends, and follow nested tags to the bottom — every tag object in the chain
   # is transferred, so every one of them is content.
+  # Walks a tag chain to the bottom, printing every tag object. Returns nonzero if any
+  # link cannot be read or its target cannot be found: a chain we can only partly see is
+  # not a chain we have reviewed.
   dump_tags() {   # $1 = label, $2 = starting sha
-    local obj="$2" t target
+    local obj="$2" t target body
     while :; do
-      t="$(git -C "$root" cat-file -t "$obj" 2>/dev/null)" || return 0
-      [ "$t" = tag ] || return 0
-      echo "=== $1 tag object $obj ==="
-      git -C "$root" cat-file -p "$obj"
-      echo
-      target="$(git -C "$root" cat-file -p "$obj" 2>/dev/null | awk '/^object /{print $2; exit}')"
-      [ -n "$target" ] || return 0
+      t="$(git -C "$root" cat-file -t "$obj" 2>/dev/null)" || return 0   # absent: caller decides
+      [ "$t" = tag ] || return 0                                        # bottom of the chain
+      body="$(git -C "$root" cat-file -p "$obj" 2>/dev/null)" || return 1
+      printf '=== %s tag object %s ===\n%s\n\n' "$1" "$obj" "$body"
+      target="$(printf '%s\n' "$body" | awk '/^object /{print $2; exit}')"
+      [ -n "$target" ] || return 1
+      # a tag whose target we do not hold cannot be checked at all
+      git -C "$root" cat-file -e "$target" 2>/dev/null || return 1
       obj="$target"
     done
   }
   case "$sel" in
     *--range*)
-      if ! { dump_tags removed "$rangea"; dump_tags added "$rangeb"; } >"$diff.tags" 2>/dev/null; then
-        echo "[ensemble] could not collect the tag objects — nothing was reviewed" >&2
+      if ! { dump_tags removed "$rangea" && dump_tags added "$rangeb"; } >"$diff.tags" 2>/dev/null; then
+        echo "[ensemble] a tag object could not be read in full — nothing was reviewed" >&2
         prepared=0
       elif [ -s "$diff.tags" ]; then
         if ! { cat "$diff" >>"$diff.tags" && mv "$diff.tags" "$diff"; }; then
