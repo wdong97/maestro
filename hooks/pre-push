@@ -145,8 +145,14 @@ ensemble_count_verdicts() {
 
 ensemble_review_gate() {
   if ! command -v ensemble >/dev/null 2>&1; then
-    echo "[ensemble] 'ensemble' not on PATH — skipping review (run maestro install.sh)" >&2
-    return 0
+    # This hook only exists because maestro installed it. If the tool it calls has gone
+    # missing, nothing is reviewing this push, and "nothing reviewed" is not "clean".
+    cat >&2 <<EOF
+[ensemble] 'ensemble' is not on PATH — nothing can review this push, so it is refused.
+[ensemble]   fix the install:  cd <your maestro checkout> && ./install.sh
+[ensemble]   or push anyway:   ENSEMBLE_REVIEW=0 git push
+EOF
+    return 1
   fi
 
   local upstream selectors budget output status reply ranges ranges_rc reviewer

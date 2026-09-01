@@ -343,7 +343,7 @@ cmd_review() {
   dump_tags() {   # $1 = label, $2 = starting sha
     local obj="$2" t target body
     while :; do
-      t="$(git -C "$root" cat-file -t "$obj" 2>/dev/null)" || return 0   # absent: caller decides
+      t="$(git -C "$root" cat-file -t "$obj" 2>/dev/null)" || return 1   # unreadable: fail closed
       [ "$t" = tag ] || return 0                                        # bottom of the chain
       body="$(git -C "$root" cat-file -p "$obj" 2>/dev/null)" || return 1
       printf '=== %s tag object %s ===\n%s\n\n' "$1" "$obj" "$body"
@@ -368,6 +368,16 @@ cmd_review() {
         rm -f "$diff.tags"
       fi;;
   esac
+  # `git log -p` renders a changed binary as "Binary files differ" and nothing else. The
+  # bytes are still being transferred, so name them: path, size and blob id, appended so
+  # the reviewer can see exactly what it is NOT being shown.
+  if [ "$prepared" = 1 ] && grep -q '^Binary files .* differ$' "$diff" 2>/dev/null; then
+    { echo
+      echo "=== binary changes in this push (contents not renderable as text) ==="
+      grep '^Binary files .* differ$' "$diff" | sort -u
+      echo "Review these by inspecting the objects directly; the patch above does not show them."
+    } >>"$diff" || prepared=0
+  fi
   if [ "$prepared" = 0 ]; then
     echo "[ensemble] could not prepare the diff for $sel — nothing was reviewed" >&2
     verdict_sections HOLD "the diff could not be built; no review ran"
@@ -406,7 +416,16 @@ cmd_review() {
 
   run_codex() {
     echo "===== CODEX REVIEW ($sel) ====="
-    codex exec review $sel $mopt -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" >"$dir/codex.log" 2>&1 \
+    # The native reviewer re-derives the diff from the selector, which throws away the
+    # patch we prepared — the tag objects, the rewind's removed commits, the whole
+    # history of a new ref. Only let it handle selectors where its own derivation
+    # matches ours; everything else goes to the prompt path with OUR patch.
+    case "$sel" in
+      *--base*|*--uncommitted*)
+        codex exec review $sel $mopt -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" >"$dir/codex.log" 2>&1 \
+          || false;;
+      *) false;;
+    esac \
       || codex exec -C "$root" --skip-git-repo-check --sandbox read-only $mopt \
            -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" - >>"$dir/codex.log" 2>&1 <<EOF
 Review this diff read-only for correctness bugs, security issues, and risky changes.
