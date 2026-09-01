@@ -74,6 +74,12 @@ for d in "$REPO"/skills/*/; do
   link "$d" "$AGENTS/skills/$name"
 done
 [ "$CODEX" = "$CODEX_PLAIN" ] || note "note  CODEX_HOME=$CODEX (linked there as well as ~/.codex)"
+# Record the roots we linked into. CODEX_HOME can differ between install and uninstall
+# (it is an env var), and an uninstall that guesses leaves symlinks and backups behind.
+mkdir -p "$STATE"
+printf '%s\n' "$CLAUDE/skills" "$CODEX/skills" "$CODEX_PLAIN/skills" "$AGENTS/skills" \
+  | awk '!seen[$0]++' >"$STATE/skill-roots"
+note "state $STATE/skill-roots (roots to clean on uninstall)"
 
 echo "[commands] -> ~/.claude/commands (Claude slash commands)"
 for f in "$REPO"/commands/*.md; do link "$f" "$CLAUDE/commands/$(basename "$f")"; done

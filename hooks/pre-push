@@ -148,7 +148,7 @@ SELECTORS
 [ensemble] review did not finish within ${budget}s — push refused.
 [ensemble] A push that outran its review is not a reviewed push.
 [ensemble]   raise the budget:  ENSEMBLE_REVIEW_TIMEOUT=1200 git push
-[ensemble]   or review first:   ensemble review $selector
+[ensemble]   or review first:   ensemble review --base ${ENSEMBLE_PUSH_REMOTE:-origin}/HEAD
 [ensemble]   then push:         ENSEMBLE_REVIEW=0 git push
 EOF
     return 1
@@ -192,7 +192,7 @@ EOF
 
 [ensemble] expected $expected verdict(s) for $nsel range(s), got $verdicts — push refused.
 [ensemble] A reviewer that answered nothing has not approved anything.
-[ensemble]   re-run:  ensemble review $selector
+[ensemble]   re-run:  ensemble review --base ${ENSEMBLE_PUSH_REMOTE:-origin}/HEAD
 [ensemble]   or push: ENSEMBLE_REVIEW=0 git push
 EOF
     return 1

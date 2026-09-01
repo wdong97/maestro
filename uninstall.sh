@@ -21,10 +21,19 @@ unlink_if_ours() {
 
 for d in "$REPO"/skills/*/; do
   name="$(basename "$d")"
-  unlink_if_ours "$HOME/.claude/skills/$name"
-  unlink_if_ours "$HOME/.codex/skills/$name"
-  unlink_if_ours "$HOME/.agents/skills/$name"
-  [ -n "${CODEX_HOME:-}" ] && unlink_if_ours "$CODEX_HOME/skills/$name"
+  # Clean the roots install.sh recorded, not the ones this shell happens to point at:
+  # CODEX_HOME may have changed since, and a guess leaves symlinks and .maestro-bak
+  # backups stranded. Fall back to the defaults when there is no record.
+  if [ -f "$STATE/skill-roots" ]; then
+    while IFS= read -r root; do
+      [ -n "$root" ] && unlink_if_ours "$root/$name"
+    done <"$STATE/skill-roots"
+  else
+    unlink_if_ours "$HOME/.claude/skills/$name"
+    unlink_if_ours "$HOME/.codex/skills/$name"
+    unlink_if_ours "$HOME/.agents/skills/$name"
+    [ -n "${CODEX_HOME:-}" ] && unlink_if_ours "$CODEX_HOME/skills/$name"
+  fi
 done
 for f in "$REPO"/commands/*.md; do unlink_if_ours "$HOME/.claude/commands/$(basename "$f")"; done
 unlink_if_ours "$HOME/.local/bin/ensemble"
