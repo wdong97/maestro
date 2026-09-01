@@ -258,6 +258,7 @@ cmd_review() {
   local sel="--uncommitted" by="codex" mx="$CODEX_MODEL_DEFAULT" eff="high"
   while [ $# -gt 0 ]; do case "$1" in
     --base) sel="--base $2"; shift;; --commit) sel="--commit $2"; shift;;
+    --range) sel="--range $2"; shift;;
     --uncommitted) sel="--uncommitted";; --by) by="$2"; shift;;
     --mx) mx="$2"; shift;; *) die "unknown review flag $1";;
   esac; shift; done
@@ -266,16 +267,38 @@ cmd_review() {
   local root="$ROOT_DEFAULT"
   local dir="$BASE_DIR/review/$(date +%s)"; mkdir -p "$dir"
   local diff="$dir/diff.patch"
+  # One verdict section per reviewer, so a caller counting verdicts (the push gate) gets
+  # one answer per reviewer whether or not there was anything to review.
+  verdict_sections() {   # $1 = SHIP|HOLD, $2 = why
+    case "$by" in
+      both) printf '===== CLAUDE REVIEW (%s) =====\n%s\nVERDICT: %s\n' "$sel" "$2" "$1"
+            printf '===== CODEX REVIEW (%s) =====\n%s\nVERDICT: %s\n' "$sel" "$2" "$1";;
+      *)    printf '===== %s REVIEW (%s) =====\n%s\nVERDICT: %s\n' \
+              "$(echo "$by" | tr '[:lower:]' '[:upper:]')" "$sel" "$2" "$1";;
+    esac
+  }
+
+  # A diff we could not build is not an empty diff. Preparation that fails must never
+  # read as "nothing to review", or a force push whose base is missing locally sails
+  # through unreviewed.
+  local prepared=1 rangea rangeb
   case "$sel" in
-    *--base*)   git -C "$root" diff "${sel#--base }"...HEAD >"$diff";;
-    *--commit*) git -C "$root" show "${sel#--commit }" >"$diff";;
+    *--base*)   git -C "$root" diff "${sel#--base }"...HEAD >"$diff" || prepared=0;;
+    *--commit*) git -C "$root" show "${sel#--commit }" >"$diff" || prepared=0;;
+    *--range*)  rangea="${sel#--range }"; rangeb="${rangea#*..}"; rangea="${rangea%%..*}"
+                git -C "$root" diff "$rangea" "$rangeb" >"$diff" || prepared=0;;
     *)          if git -C "$root" rev-parse HEAD >/dev/null 2>&1; then
-                  git -C "$root" diff HEAD >"$diff"
-                else { git -C "$root" diff; git -C "$root" diff --cached; } >"$diff"; fi;;
+                  git -C "$root" diff HEAD >"$diff" || prepared=0
+                else { git -C "$root" diff; git -C "$root" diff --cached; } >"$diff" || prepared=0; fi;;
   esac
+  if [ "$prepared" = 0 ]; then
+    echo "[ensemble] could not prepare the diff for $sel — nothing was reviewed" >&2
+    verdict_sections HOLD "the diff could not be built; no review ran"
+    return 1
+  fi
   if [ ! -s "$diff" ]; then
     echo "[ensemble] no changes to review ($sel)"
-    printf '\nVERDICT: SHIP\n'   # an empty range has nothing to object to
+    verdict_sections SHIP "empty range — nothing to object to"
     return 0
   fi
 
@@ -291,8 +314,10 @@ cmd_review() {
   # The leading newline matters: reviewer output often has no trailing newline, and a
   # verdict glued to the end of the last finding is not a line the gate can see.
   emit_verdict() {   # $1 = reviewer output file, $2 = its exit status, $3 = derive|require
-    grep -qiE '^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$' "$1" 2>/dev/null && return
+    # Exit status first: a reviewer that printed SHIP and then died (API drop, truncated
+    # write) has approved nothing, and its own verdict must not be trusted.
     if [ "$2" -ne 0 ] || [ ! -s "$1" ]; then printf '\nVERDICT: HOLD\n'; return; fi
+    grep -qiE '^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$' "$1" 2>/dev/null && return
     if [ "$3" != derive ]; then printf '\nVERDICT: HOLD\n'; return; fi
     if grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$1"; then printf '\nVERDICT: HOLD\n'
     else printf '\nVERDICT: SHIP\n'; fi
@@ -402,10 +427,14 @@ cmd_install_hook() {
     local gd; gd="$(git rev-parse --git-dir 2>/dev/null)" || die "not in a git repo"
     mkdir -p "$gd/hooks"; hookfile="$gd/hooks/pre-push"
   fi
-  ln -sfn "$canonical" "$hookfile" 2>/dev/null || cp "$canonical" "$hookfile"
-  # config last: only point git at the directory once the hook is actually in it
+  ln -sfn "$canonical" "$hookfile" 2>/dev/null || cp "$canonical" "$hookfile" \
+    || die "could not install the hook to $hookfile (unwritable or full?)"
+  chmod +x "$hookfile" 2>/dev/null
+  # Prove it landed and can run BEFORE repointing git at its directory: a global
+  # hooksPath aimed at a directory with no working hook disables every hook you have.
+  [ -e "$hookfile" ] && [ -x "$hookfile" ] \
+    || die "hook did not install correctly at $hookfile — global config left untouched"
   [ "$scope" = global ] && git config --global core.hooksPath "$(dirname "$hookfile")"
-  chmod +x "$hookfile"
   echo "[ensemble] pre-push review hook installed ($scope): $hookfile"
   echo "[ensemble]   bypass once: ENSEMBLE_REVIEW=0 git push   |  reviewer env: ENSEMBLE_REVIEWER=claude|codex|both"
 }
