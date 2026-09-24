@@ -6,6 +6,16 @@ project-specific instructions as needed.
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks,
 use judgment.
 
+## 0. Start Every Task With Intake
+
+Every new task, however small: **Frame** the ask and what's out of scope → **Explore**
+where it lands → **Ask** every real fork in one batch → **Plan** every write, each with
+its check → **Gate**: stop and wait for "go." A write the plan didn't include isn't
+approved. Findings mid-task are parked and batched for after the plan is done.
+
+Questions and research skip intake; the gate applies once work turns into a repo
+write. Full rules: the `start-task` skill.
+
 ## 1. Think Before Coding
 
 Don't assume. Don't hide confusion. Surface tradeoffs.
