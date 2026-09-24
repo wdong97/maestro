@@ -198,6 +198,16 @@ same intake.
 /start-task "add dark mode to the dashboard"   # run intake explicitly on a task
 ```
 
+**Which skills earn their keep — `/skill-audit`.** Counts which skills Claude and Codex
+actually use from your chat logs, maps duplicates and broken links, prices what every
+skill's description costs each session, and mines your own messages for requests you
+keep repeating. It only reports: pruning happens after you approve, into a dated
+archive you can restore from.
+
+```bash
+python3 ~/maestro/skills/skill-audit/scripts/audit.py   # or just ask for a skill audit
+```
+
 ## Verify / undo
 
 ```bash

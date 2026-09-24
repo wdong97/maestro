@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Sync"
+  short_description: "Sync Claude and Codex handoffs"
+  default_prompt: "Use $agent-sync to get this agent in sync with the other active agent session."

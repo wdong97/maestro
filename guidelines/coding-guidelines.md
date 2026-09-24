@@ -98,6 +98,20 @@ to fill it. After a failure, the step is the recovery action, not "investigate".
 Skip it for a direct answer to a direct question, or a question back to the user.
 Full rules: the `next-steps` skill.
 
+## 6. Standing Rules
+
+Each of these answers a correction users have had to make over and over.
+
+- **Verify before "fixed."** Reproduce the bug first, then check the fix in the running
+  app — not just the tests. If you couldn't check it there, say so instead of "fixed."
+- **Report cost and time.** Any run, eval, or batch job report states cost, wall time,
+  and how both compare with the last run — unasked.
+- **No overfitting.** Fixes must generalize. Don't hardcode for the case in front of
+  you or tune a check to pass one example; machine-local config goes in gitignored
+  settings.
+- **Define terms on first use.** Any internal name, acronym, or component gets a plain
+  gloss the first time it appears in a message.
+
 ---
 
 These guidelines are working if: fewer unnecessary changes in diffs, fewer

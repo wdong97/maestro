@@ -1,0 +1,4 @@
+interface:
+  display_name: "Copywriting"
+  short_description: "Write, critique, and humanize copy"
+  default_prompt: "Use $copywriting to write, improve, critique, or humanize this customer-facing copy."
