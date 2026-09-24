@@ -17,8 +17,8 @@ list for later, not into the current job.
   starts intake again.
 - Questions, research and investigation skip the ritual. The gate applies as soon as
   the work turns into a repo write.
-- Calling a skill directly (`/tdd`, `/delegate`, …) skips Frame and Ask, but not Explore,
-  Plan or Gate: explore enough that the plan names real files, then wait for "go".
+- Calling a skill directly (`/tdd`, `/delegate`, …) gets the full intake too; the skill
+  runs after "go".
 
 ## The five steps
 
