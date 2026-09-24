@@ -380,7 +380,7 @@ cmd_review() {
   fi
   if [ "$prepared" = 0 ]; then
     echo "[ensemble] could not prepare the diff for $sel — nothing was reviewed" >&2
-    verdict_sections HOLD "the diff could not be built; no review ran"
+    verdict_sections HOLD "- [P0] the diff could not be built; no review ran"
     return 1
   fi
   if [ ! -s "$diff" ]; then
@@ -394,10 +394,12 @@ cmd_review() {
   # `codex exec review` has its own format and supplies none, so derive it from what the
   # run actually produced. A reviewer that failed to run gets HOLD — never SHIP by
   # default, since "no findings" and "never ran" must not look alike.
-  # $3 = derive: the native `codex exec review`, whose format we know — no [P#] findings
-  #      from a successful run genuinely means clean, so SHIP may be inferred.
+  # $3 = derive: the native `codex exec review`, whose format we know — no [P0]/[P1]
+  #      findings from a successful run means nothing blocking, so SHIP may be inferred.
   #      require: a prompted reviewer, told to end with a verdict. If it didn't, we do not
   #      know what it meant, and unknown is HOLD.
+  # Every HOLD we write ourselves carries a [P0] line, because the push gate lets a HOLD
+  # through when its only findings are minor — and "never ran" is not minor.
   # The leading newline matters: reviewer output often has no trailing newline, and a
   # verdict glued to the end of the last finding is not a line the gate can see.
   emit_verdict() {   # $1 = reviewer output file, $2 = its exit status, $3 = derive|require
@@ -407,10 +409,16 @@ cmd_review() {
     [ -s "$1" ] && [ -n "$(tail -c1 "$1" 2>/dev/null)" ] && echo
     # Exit status first: a reviewer that printed SHIP and then died (API drop, truncated
     # write) has approved nothing, and its own verdict must not be trusted.
-    if [ "$2" -ne 0 ] || [ ! -s "$1" ]; then printf '\nVERDICT: HOLD\n'; return; fi
+    if [ "$2" -ne 0 ] || [ ! -s "$1" ]; then
+      printf '\n- [P0] the reviewer did not complete (exit %s); nothing was reviewed\nVERDICT: HOLD\n' "$2"
+      return
+    fi
     grep -qiE '^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$' "$1" 2>/dev/null && return
-    if [ "$3" != derive ]; then printf '\nVERDICT: HOLD\n'; return; fi
-    if grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$1"; then printf '\nVERDICT: HOLD\n'
+    if [ "$3" != derive ]; then
+      printf '\n- [P0] the reviewer gave no verdict, so what it meant is unknown\nVERDICT: HOLD\n'
+      return
+    fi
+    if grep -qE '^[[:space:]]*-?[[:space:]]*\[P[01]\]' "$1"; then printf '\nVERDICT: HOLD\n'
     else printf '\nVERDICT: SHIP\n'; fi
   }
 
@@ -430,6 +438,8 @@ cmd_review() {
            -c model_reasoning_effort='"'"$eff"'"' -o "$dir/codex.out" - >>"$dir/codex.log" 2>&1 <<EOF
 Review this diff read-only for correctness bugs, security issues, and risky changes.
 Be specific (file:line), rank findings by severity as "- [P1] ...", "- [P2] ...".
+P0/P1 = breaks something, loses data, or is a security issue; P2/P3 = worth fixing,
+not blocking. Say HOLD only if there is a P0 or P1; otherwise SHIP.
 End your output with one final line, exactly: VERDICT: SHIP   (or VERDICT: HOLD)
 That line is parsed by the push gate — without it the push is refused.
 
@@ -445,6 +455,8 @@ EOF
 You are reviewing a pending push, read-only. Review this diff for correctness bugs,
 security issues, regressions, and risky changes. Rank findings by severity with
 file:line refs, written as "- [P1] ...", "- [P2] ...".
+P0/P1 = breaks something, loses data, or is a security issue; P2/P3 = worth fixing,
+not blocking. Say HOLD only if there is a P0 or P1; otherwise SHIP.
 End your output with one final line, exactly: VERDICT: SHIP   (or VERDICT: HOLD)
 That line is parsed by the push gate — without it the push is refused.
 

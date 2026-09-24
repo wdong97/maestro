@@ -15,8 +15,10 @@
 #   - The review ran unbounded in front of the push, so a slow review did not delay a
 #     push, it killed it. Three pushes in a row died that way and the work sat unpushed.
 #
-# So: a clean review asks nothing and gets out of the way. A review with findings gates —
-# prompting where it can, refusing where it cannot. A review that cannot finish also
+# So: a clean review asks nothing and gets out of the way. A review with a serious
+# finding ([P0]/[P1]) gates — prompting where it can, refusing where it cannot. Minor
+# findings ([P2] and below) print and the push proceeds: blocking on them held one docs
+# change through five review rounds of ever-smaller wording notes. A review that cannot finish also
 # refuses, because "reviewed and clean" and "never reviewed" must not look alike from the
 # outside. Every refusal names the way through.
 #
@@ -127,20 +129,28 @@ REFS
 }
 
 # Count the standalone verdict lines in one reviewer run, per reviewer section.
-# Prints "<verdicts> <holds>". A verdict is a line of its own — reviews of this hook
-# quote "VERDICT: HOLD" mid-sentence, and prose about a verdict is not a verdict.
-# Within a section the last one wins, so a reviewer that thinks aloud is read by its
-# conclusion.
+# Prints "<verdicts> <blocking> <minor>". A verdict is a line of its own — reviews of
+# this hook quote "VERDICT: HOLD" mid-sentence, and prose about a verdict is not a
+# verdict. Within a section the last one wins, so a reviewer that thinks aloud is read
+# by its conclusion.
+# A section blocks if it has a [P0]/[P1] finding, or says HOLD without naming any
+# finding at all — a HOLD we cannot see the reason for is not minor. A HOLD whose
+# findings are all [P2] or below is read by its findings, not its verdict.
 ensemble_count_verdicts() {
   awk '
-    { up = toupper($0) }
+    { up = toupper($0); s = sec ? sec : 1 }
     up ~ /^=+[[:space:]]*(CODEX|CLAUDE)[[:space:]]+REVIEW/ { sec++; next }
+    up ~ /^[[:space:]]*-?[[:space:]]*\[P[0-9]\]/ {
+      any[s] = 1
+      if (up ~ /^[[:space:]]*-?[[:space:]]*\[P[01]\]/) serious[s] = 1; else minor = 1 }
     up ~ /^[[:space:]]*VERDICT:[[:space:]]*(SHIP|HOLD)[[:space:]]*$/ {
       v = up; sub(/^[[:space:]]*VERDICT:[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
-      seen[sec ? sec : 1] = v }
-    END { n = 0; hold = 0
-          for (i in seen) { n++; if (seen[i] == "HOLD") hold++ }
-          printf "%d %d\n", n, hold }' "$1"
+      seen[s] = v }
+    END { n = 0; block = 0
+          for (i in seen) n++
+          for (i in seen) if (serious[i] || (seen[i] == "HOLD" && !any[i])) block++
+          for (i in serious) if (!(i in seen)) block++
+          printf "%d %d %d\n", n, block, minor + 0 }' "$1"
 }
 
 ensemble_review_gate() {
@@ -185,7 +195,7 @@ EOF
   # that never ran.
   : >"$output"
   status=0
-  local one chunk per_call chunk_counts n h short=0 findings=0 held=0
+  local one chunk per_call chunk_counts n b m short=0 minor=0 blocked=0
   per_call=1; [ "$reviewer" = both ] && per_call=2
   while IFS= read -r one; do
     [ -n "$one" ] || continue
@@ -203,13 +213,15 @@ EOF
       short=1
     fi
     chunk_counts="$(ensemble_count_verdicts "$chunk")"
-    n="${chunk_counts%% *}"; h="${chunk_counts##* }"
+    read -r n b m <<COUNTS
+$chunk_counts
+COUNTS
     if [ "$n" -lt "$per_call" ]; then
       echo "[ensemble] $one answered with $n of $per_call verdict(s)" >&2
       short=1
     fi
-    [ "$h" -gt 0 ] && held=1
-    grep -qE '^[[:space:]]*-?[[:space:]]*\[P[0-9]\]' "$chunk" && findings=1
+    [ "$b" -gt 0 ] && blocked=1
+    [ "$m" -gt 0 ] && minor=1
     rm -f "$chunk"
   done <<SELECTORS
 $selectors
@@ -232,8 +244,8 @@ EOF
   # Each range answered for itself above. What is left is to act on the tally:
   #   short    — some range produced fewer verdicts than reviewers asked; unreadable,
   #              and unreadable is not clean
-  #   held     — a reviewer said HOLD; any HOLD beats every SHIP
-  #   findings — a "[P#]" marker anywhere means there is something to fix
+  #   blocked  — a [P0]/[P1] finding, or a HOLD with no finding to explain it
+  #   minor    — [P2]-and-below findings only: printed, and the push goes ahead
   rm -f "$output"
 
   if [ "$short" -eq 1 ]; then
@@ -247,14 +259,17 @@ EOF
     return 1
   fi
 
-  if [ "$findings" -eq 0 ] && [ "$held" -eq 0 ]; then
-    echo "[ensemble] review clean (VERDICT: SHIP) — pushing." >&2
+  if [ "$blocked" -eq 0 ]; then
+    if [ "$minor" -eq 1 ]; then
+      echo "[ensemble] review found minor notes only ([P2] and below) — pushing." >&2
+    else
+      echo "[ensemble] review clean (VERDICT: SHIP) — pushing." >&2
+    fi
     return 0
   fi
 
   if [ -t 1 ] && [ -e /dev/tty ]; then
-    printf '\n[ensemble] review says %s. push anyway? [y/N] ' \
-      "$([ "$findings" -eq 1 ] && echo "there are findings" || echo "HOLD")" >&2
+    printf '\n[ensemble] review found a serious issue ([P0]/[P1] or an unexplained HOLD). push anyway? [y/N] ' >&2
     read -r reply </dev/tty
     case "$reply" in
       y | Y | yes | YES) return 0 ;;
