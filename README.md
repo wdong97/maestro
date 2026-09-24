@@ -191,7 +191,8 @@ an explicit "nothing needed from you." No more asking "ok, what's next?"
 **Plan before touching anything — `/start-task`.** Always on: every new task starts with
 intake — frame the ask, explore, ask every real fork in one batch, then a one-minute
 plan — and the agent waits for your "go" before writing anything. Extras it spots along
-the way are parked for after.
+the way are parked for after. Calling a skill directly (`/tdd`, `/delegate`) skips the
+intake questions, but never the "go."
 
 ```bash
 /start-task "add dark mode to the dashboard"   # run intake explicitly on a task

@@ -14,7 +14,7 @@ args, or to the latest request.
 3. **Ask** — every real fork in one batch, recommended option first, in plain words. Or
    say "No questions — no genuine forks."
 4. **Plan** — numbered steps each with its check, expected complexities, one-line
-   routing. Copy it into the task list.
+   routing. Copy it into your in-session todo list (not a repo file — no approval needed).
 5. **Gate** — stop and wait for "go." Only writes in the plan are approved.
 
 Args: $ARGUMENTS
