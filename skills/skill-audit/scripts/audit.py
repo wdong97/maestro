@@ -42,7 +42,7 @@ for r in usage[:10]:
 
 tot = {r['skill']: N(r, 'total') for r in usage}
 never = sorted({r['dir_name'] for r in inv if r['source'] not in ('stray file', 'BROKEN symlink')
-                and tot.get(r['dir_name'], 0) == 0})
+                and tot.get(r['dir_name'], 0) + tot.get(r['fm_name'], 0) == 0})
 print(f'\n-- installed skills never used in the log window: {len(never)}')
 print('  ' + ', '.join(never))
 

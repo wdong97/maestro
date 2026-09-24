@@ -92,4 +92,6 @@ for r in msgs:
     seen.add(k); dedup.append(r)
 with open(OUT + '/dedup.json', 'w') as fh:
     json.dump(dedup, fh)
+for f in ('msgs.jsonl', 'dedup.json'):  # pre-existing files keep their old mode otherwise
+    os.chmod(os.path.join(OUT, f), 0o600)
 print(f'messages: {len(msgs)} extracted, {len(dedup)} after dropping headless runs + duplicates -> {OUT}/dedup.json')

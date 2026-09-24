@@ -17,7 +17,10 @@ def parse_out(desc):
     ap = argparse.ArgumentParser(description=desc)
     ap.add_argument('--out', default=default_out(), help='output dir (default: ~/.cache/skill-audit/<today>/)')
     a = ap.parse_args()
-    os.makedirs(a.out, exist_ok=True)
+    # The out dir can hold raw user messages (and any secrets pasted into them): owner-only.
+    os.umask(0o077)
+    os.makedirs(a.out, mode=0o700, exist_ok=True)
+    os.chmod(a.out, 0o700)
     return a.out
 
 
