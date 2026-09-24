@@ -14,8 +14,8 @@ its check → **Gate**: stop and wait for "go." A write the plan didn't include 
 approved. Findings mid-task are parked and batched for after the plan is done.
 
 Questions and research skip intake; the gate applies once work turns into a repo
-write. Calling a skill directly (`/tdd`, `/delegate`) skips the intake steps but not
-the gate. Full rules: the `start-task` skill.
+write. Calling a skill directly (`/tdd`, `/delegate`) skips Frame, Explore and Ask,
+but still plans and waits for "go." Full rules: the `start-task` skill.
 
 ## 1. Think Before Coding
 

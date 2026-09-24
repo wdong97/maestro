@@ -192,7 +192,7 @@ an explicit "nothing needed from you." No more asking "ok, what's next?"
 intake — frame the ask, explore, ask every real fork in one batch, then a one-minute
 plan — and the agent waits for your "go" before writing anything. Extras it spots along
 the way are parked for after. Calling a skill directly (`/tdd`, `/delegate`) skips the
-intake steps, but never the "go."
+intake questions, but still shows a short plan and waits for your "go."
 
 ```bash
 /start-task "add dark mode to the dashboard"   # run intake explicitly on a task
