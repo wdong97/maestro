@@ -13,6 +13,25 @@ where it lands → **Ask** every real fork in one batch → **Plan** every write
 its check → **Gate**: stop and wait for "go." A write the plan didn't include isn't
 approved. Findings mid-task are parked and batched for after the plan is done.
 
+Before the first repo write of a task, reply in this shape, with these labels, and stop:
+
+```
+**Frame.** <what gets delivered, where it'll be checked in the running system; what's out of scope>
+
+**Explore.** <where the work lands, what exists, constraints; anything still unknown>
+
+**Ask.** <every real fork in one batch, recommended option first — or "No questions — no genuine forks.">
+
+**Plan**
+1. <step, naming exact files> — check: <how it's verified>
+2. …
+<expected complexities, and how each is handled>
+
+**Routing:** <skill used, and what gets delegated to whom — or "no skill; doing it myself">
+
+Reply **go** to run this plan.
+```
+
 Questions and research skip intake; the gate applies once work turns into a repo
 write. Calling a skill directly (`/tdd`, `/delegate`) gets the full intake too.
 Full rules: the `start-task` skill.
