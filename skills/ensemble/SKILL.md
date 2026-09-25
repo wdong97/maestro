@@ -24,6 +24,9 @@ How this relates to the other maestro skills — it complements, doesn't replace
   Use it when you do **not** need to watch.
 - **`ensemble`** = the same idea but **watchable in real tmux panes**, plus a
   symmetric duel and a push-time review gate.
+- **`relay`** (`ensemble relay new|send|wait|status`) = ONE long-lived dev session fed
+  hop by hop, each hop watchable here and ending in a parsed RELAY-REPORT. Use it for
+  a multi-phase build instead of copy-pasting prompts and reports between windows.
 - **`board`** = what the work *is* (kanban + roadmap), where these show what's *running*.
 
 If the user also has these non-maestro skills installed, they compose well; skip the

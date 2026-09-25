@@ -208,6 +208,16 @@ archive you can restore from.
 python3 ~/maestro/skills/skill-audit/scripts/audit.py   # or just ask for a skill audit
 ```
 
+**Stop copy-pasting between agents — `/relay`.** One agent plans, one long-lived dev
+agent (Claude or Codex) builds. The planner drafts each prompt, you say "go", it sends
+it to the same dev session, then checks the dev agent's report against git and drafts
+the next. Watch any hop live in tmux.
+
+```bash
+ensemble relay new phase13 --to codex --dir ~/devel/currentbase-v2   # once
+/relay phase13                                                        # each hop
+```
+
 ## Verify / undo
 
 ```bash

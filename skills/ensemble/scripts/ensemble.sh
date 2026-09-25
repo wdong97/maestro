@@ -6,6 +6,7 @@
 # Subcommands:
 #   duel   [--rw] [--name N] [--mc M] [--mx M] [--wait] "PROMPT"
 #   spawn  <claude|codex> [--rw] [--dir D] [--name N] "PROMPT"
+#   relay  new|send|wait|status NAME ...   (one long-lived dev session, hop by hop)
 #   review [--base REF | --uncommitted | --commit SHA] [--by claude|codex|both]
 #   attach [NAME]        status        clean [NAME]
 #   install-review-hook  [--global]
@@ -1135,11 +1136,140 @@ cmd_web() {
   ENSEMBLE_BIN="$self" exec python3 "$web" "$@"
 }
 
+# Relay: ONE long-lived dev session that an orchestrating agent feeds hop by hop,
+# instead of the user copy-pasting prompts in and reports out. Every hop resumes the
+# same session (claude --resume / codex exec resume), so the dev agent keeps its
+# context; each hop runs in a watchable tmux window and ends in a RELAY-REPORT block
+# the orchestrator parses. The approval gate lives in the orchestrator (the relay
+# skill): this command never decides on its own to send the next hop.
+#   relay new NAME --to claude|codex [--dir D] [--ro] [--mc M] [--mx M] [--eff E]
+#   relay send NAME [FILE|-]           run the next hop (prompt from FILE or stdin)
+#   relay wait NAME [--timeout SECS]   block until the hop ends; print its report
+#   relay status NAME                  list hops so far
+RELAY_REPORT_SPEC='
+---
+End your reply with this block, exactly this shape — the orchestrator parses it:
+RELAY-REPORT
+status: done | blocked | needs-input
+branch: <branch you worked on>
+commit: <latest commit SHA, or none>
+pushed: yes | no
+tests: <commands you ran and their results, or none>
+next: <one line: what should happen next, or what you need>
+Do not push unless this prompt explicitly says this hop is a push hop.'
+
+_relay_last() { # $1=dir -> highest hop number, 0 if none
+  local n=0 f k
+  for f in "$1"/hop-*.prompt; do [ -e "$f" ] || continue
+    k="${f##*/hop-}"; k="${k%.prompt}"; [ "$k" -gt "$n" ] && n="$k"; done
+  echo "$n"
+}
+_relay_sid() { # $1=dir: print the dev session id, learning codex's from hop 1's stream
+  [ -s "$1/session" ] && { cat "$1/session"; return; }
+  local id=""
+  [ -f "$1/hop-1.stream" ] && id="$(grep -o '"thread_id":"[^"]*"' "$1/hop-1.stream" | head -1 | cut -d'"' -f4)"
+  [ -n "$id" ] && printf '%s' "$id" > "$1/session" && echo "$id"
+}
+_relay_report() { # $1=out file: print the RELAY-REPORT block, or say it is missing
+  if grep -q '^RELAY-REPORT[[:space:]]*$' "$1" 2>/dev/null; then
+    sed -n '/^RELAY-REPORT[[:space:]]*$/,$p' "$1"; echo   # answers often lack a final newline
+  else
+    echo "[relay] no RELAY-REPORT block in $1 — read the full answer; do not assume it finished"
+  fi
+}
+
+cmd_relay() {
+  local op="${1:-}"; shift || true
+  local name="${1:-}"; shift || true
+  [ -n "$name" ] || die "relay $op needs a NAME"
+  case "$name" in *[!A-Za-z0-9._-]*) die "relay NAME: letters, digits, . _ - only";; esac
+  local dir="$BASE_DIR/relay/$name"
+  case "$op" in
+    new)
+      local to="" wd="$ROOT_DEFAULT" mode=rw mc="" mx="$CODEX_MODEL_DEFAULT" eff="$CODEX_EFFORT_DEFAULT"
+      while [ $# -gt 0 ]; do case "$1" in
+        --to) to="$2"; shift;; --dir) wd="$2"; shift;; --ro) mode=ro;;
+        --mc) mc="$2"; shift;; --mx) mx="$2"; shift;; --eff) eff="$2"; shift;;
+        *) die "unknown relay new flag $1";; esac; shift; done
+      [ "$to" = claude ] || [ "$to" = codex ] || die "relay new needs --to claude|codex"
+      case "$mc$mx$eff" in *[!A-Za-z0-9._:-]*) die "invalid model/effort name";; esac
+      wd="$(cd "$wd" 2>/dev/null && pwd)" || die "relay: --dir not found: $wd"
+      [ -e "$dir" ] && die "relay '$name' already exists ($dir)"
+      mkdir -p "$dir"
+      printf '%s' "$to" >"$dir/agent"; printf '%s' "$wd" >"$dir/cwd"; printf '%s' "$mode" >"$dir/mode"
+      printf '%s' "$mc" >"$dir/mc"; printf '%s' "$mx" >"$dir/mx"; printf '%s' "$eff" >"$dir/eff"
+      echo "[relay] '$name': $to dev agent in $wd ($mode). next: ensemble relay send $name <prompt-file>";;
+    send)
+      [ -d "$dir" ] || die "no relay '$name' — create it with: ensemble relay new $name --to claude|codex"
+      local to wd mode mc mx eff last n prompt sid agent m sb tee_target
+      to="$(cat "$dir/agent")"; wd="$(cat "$dir/cwd")"; mode="$(cat "$dir/mode")"
+      mc="$(cat "$dir/mc")"; mx="$(cat "$dir/mx")"; eff="$(cat "$dir/eff")"
+      last="$(_relay_last "$dir")"
+      [ "$last" -gt 0 ] && [ ! -f "$dir/hop-$last.done" ] && die "hop $last is still running — ensemble relay wait $name"
+      if [ -n "${1:-}" ] && [ "$1" != - ]; then prompt="$(cat "$1")" || die "cannot read $1"
+      else prompt="$(cat)"; fi
+      [ -n "$prompt" ] || die "relay send: empty prompt"
+      n=$((last + 1)); sid="$(_relay_sid "$dir")"
+      if [ "$to" = claude ]; then
+        if [ "$n" -eq 1 ]; then
+          sid="$(python3 -c 'import uuid; print(uuid.uuid4())')" || die "need python3 for a session id"
+          printf '%s' "$sid" >"$dir/session"
+          agent="$(claude_cmd "$mode" "$mc" "$wd") --session-id $sid"
+        else
+          [ -n "$sid" ] || die "relay '$name' has no session id to resume"
+          agent="$(claude_cmd "$mode" "$mc" "$wd") --resume $sid"
+        fi
+        agent="{ cd $(printf %q "$wd") && $agent; }"; tee_target="$dir/hop-$n.out"   # braces: `|` binds tighter than `&&`
+      else
+        m=""; [ -n "$mx" ] && m="-m $mx"
+        if [ "$n" -eq 1 ]; then
+          [ "$mode" = rw ] && sb="--sandbox workspace-write" || sb="--sandbox read-only"
+          agent="codex exec --json -C $(printf %q "$wd") --skip-git-repo-check $sb $m -c model_reasoning_effort=$(printf %q "\"$eff\"") -o $(printf %q "$dir/hop-$n.out") -"
+        else
+          [ -n "$sid" ] || die "relay '$name': no codex session id found in hop-1.stream"
+          # `exec resume` takes no -C/--sandbox: run from the work dir, set the sandbox by config.
+          [ "$mode" = rw ] && sb='-c sandbox_mode="workspace-write"' || sb='-c sandbox_mode="read-only"'
+          agent="{ cd $(printf %q "$wd") && codex exec resume --json --skip-git-repo-check $sb $m -c model_reasoning_effort=$(printf %q "\"$eff\"") -o $(printf %q "$dir/hop-$n.out") $sid -; }"
+        fi
+        tee_target="$dir/hop-$n.stream"   # -o owns hop-N.out
+      fi
+      local win="relay-$name" sess="ensemble"
+      if ! tmux has-session -t "$sess" 2>/dev/null; then new_session "$sess" "$wd"; tmux rename-window -t "$sess" "$win"
+      elif ! tmux list-windows -t "$sess" -F '#W' | grep -qx "$win"; then tmux new-window -t "$sess" -n "$win" -c "$wd"; fi
+      launch_pane "$sess:$win" "$win hop $n" "$agent" "$prompt$RELAY_REPORT_SPEC" "$tee_target" "$dir/hop-$n.log" "$dir/hop-$n.done"
+      echo "[relay] hop $n -> $to in $wd  |  watch: tmux attach -t $sess  |  then: ensemble relay wait $name";;
+    wait)
+      [ -d "$dir" ] || die "no relay '$name'"
+      local timeout=7200 last waited=0
+      while [ $# -gt 0 ]; do case "$1" in --timeout) timeout="$2"; shift;; *) die "unknown relay wait flag $1";; esac; shift; done
+      last="$(_relay_last "$dir")"; [ "$last" -gt 0 ] || die "relay '$name' has no hops yet"
+      while [ ! -f "$dir/hop-$last.done" ]; do
+        [ "$waited" -ge "$timeout" ] && { echo "[relay] hop $last still running after ${timeout}s"; return 124; }
+        sleep 5; waited=$((waited + 5))
+      done
+      _relay_sid "$dir" >/dev/null
+      echo "[relay] hop $last finished (exit $(cat "$dir/hop-$last.done"))  full answer: $dir/hop-$last.out"
+      _relay_report "$dir/hop-$last.out";;
+    status)
+      [ -d "$dir" ] || die "no relay '$name'"
+      echo "[relay] $name: $(cat "$dir/agent") in $(cat "$dir/cwd")  session: $(_relay_sid "$dir" || echo none)"
+      local i st
+      for i in $(seq 1 "$(_relay_last "$dir")"); do
+        if [ -f "$dir/hop-$i.done" ]; then
+          st="$(grep -m1 '^status:' "$dir/hop-$i.out" 2>/dev/null || echo 'status: (no report)')"
+          echo "  hop $i  exit $(cat "$dir/hop-$i.done")  $st"
+        else echo "  hop $i  running"; fi
+      done;;
+    *) die "relay needs: new|send|wait|status";;
+  esac
+}
+
 sub="${1:-}"; shift || true
 case "$sub" in
   duel)                cmd_duel "$@";;
   spawn)               cmd_spawn "$@";;
   delegate)            cmd_delegate "$@";;
+  relay)               cmd_relay "$@";;
   review)              cmd_review "$@";;
   attach)              cmd_attach "$@";;
   jobs)                cmd_jobs "$@";;
@@ -1168,6 +1298,9 @@ ensemble — Claude + Codex together (tmux-visible)
        claude-…|gpt-…); auto-routes to the Codex or Claude CLI. Friendly names
        resolve to each CLI's current latest; `codex` uses ~/.codex/config.toml.
        Runs in the background, shows in `ensemble jobs` (follow: `ensemble tail`).
+  relay new|send|wait|status NAME ...
+       feed ONE long-lived dev session hop by hop (claude or codex), each hop
+       watchable in tmux and ending in a parsed RELAY-REPORT block. See the relay skill.
   review [--base REF|--uncommitted|--commit SHA] [--by claude|codex|both]
        peer-review a diff (default reviewer: codex).
   jobs                 list every run (duel/spawn/review/dispatch) + status, from anywhere

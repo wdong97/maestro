@@ -60,7 +60,7 @@ cd ~/maestro
 - **Skills** → symlinked into `~/.claude/skills/` and `~/.codex/skills/` (both agents
   see `ensemble`, `duel`, `spawn`, `delegate`, `board`, `ensemble-review`,
   `ensemble-doctor`, `plain-docs`, `eli5`, `closeout`, `next-steps`, `start-task`,
-  `agent-sync`, `copywriting`, `skill-audit`).
+  `agent-sync`, `copywriting`, `skill-audit`, `relay`).
 - **Slash commands** → `~/.claude/commands/` — one per file in `commands/`.
 - **CLIs** → `~/.local/bin/`: `ensemble`, `board`, `ensemble-tui` (the `dash` TUI),
   and `ensemble-web` (the browser dashboard).
