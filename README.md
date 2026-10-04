@@ -218,6 +218,23 @@ ensemble relay new phase13 --to codex --dir ~/devel/currentbase-v2   # once
 /relay phase13                                                        # each hop
 ```
 
+**Work until a goal is met — `/goal-loop`.** Give it a goal ("get p95 of /search under
+200ms", "ship CSV export"). It interviews you until the goal is checkable, writes a
+contract (`.goal/GOAL.md`) and an eval harness for you to approve, then locks the evals
+and hillclimbs on its own branch: one change per iteration, keep it if the score goes
+up, git-revert it if not, log either way. It stops when the goal is met, when progress
+stalls, or when the iteration or time budget runs out. Then it reports baseline → final,
+a held-out score it never saw, and what it tried. In Codex: `$goal-loop`.
+
+```bash
+/goal-loop "cut the bundle under 300KB without dropping features"
+python3 ~/maestro/skills/goal-loop/scripts/goalctl.py install-hook   # once, opt-in: keeps Claude looping
+```
+
+The hook edits `~/.claude/settings.json` (a global Stop hook), so it's opt-in rather
+than part of `install.sh`. It does nothing unless the project's `.goal/` says a loop is
+running. To pause one, run `touch .goal/PAUSE`.
+
 ## Verify / undo
 
 ```bash
