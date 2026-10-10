@@ -77,6 +77,7 @@ def main() -> None:
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)  # an existing file keeps its old mode otherwise; screens are private
         with os.fdopen(fd, "w") as f:
             f.write(text + "\n")
         print(f"{len(sessions)} live, {len(report['gone'])} gone, {len(others)} unregistered -> {args.out}")
