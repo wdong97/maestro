@@ -48,7 +48,21 @@ from a screen; summarize.
 
 ## 3. Report
 
-One table per machine, live sessions only, `needs you` and `answer` rows first:
+Start with **Overall** — a short paragraph (3-5 sentences, plain prose, before any table)
+that reads across all sessions as one effort, per project if more than one is active:
+
+- **What we are doing** — the shared push the sessions add up to (e.g. "landing this
+  week's runtime changes for Monday's live run"), not a list of sessions.
+- **Progress** — how far along that push is, with evidence: what landed (PRs, runs),
+  what is in flight, counted where it helps ("4 of 6 runtime PRs merged").
+- **What we are trying to get through** — the next gate or deadline everything is
+  converging on (e.g. "Sun 18:00 merge cutoff, then Monday's 05:15 run"), and the one or
+  two items that most threaten it.
+
+Derive it from the goals and statuses you just classified; do not invent a goal no
+session shows. If the sessions do not share a push, say so and give one line per project.
+
+Then one table per machine, live sessions only, `needs you` and `answer` rows first:
 
 | Session | Working on | Status | Goal | Disposition |
 |---|---|---|---|---|
