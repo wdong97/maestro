@@ -31,8 +31,12 @@ For each one, decide, in your own words:
 - **Status** — one of: `running` (busy, doing work), `waiting on <who/what>`,
   `done` (its last message reports the work landed and nothing is pending),
   `blocked: <reason>`, `needs you` (a permission prompt or a question to the user on screen).
-- **Goal** — the outcome the session exists for. Start from `scope`; correct it if the
-  screen shows the goal moved.
+- **Goal** — the specific outcome that ends this session's current work, with its finish
+  line: what lands or gets decided, and by when or after what. Name the PR, run, card or
+  decision. Write "#792 merged ON before Sun 18:00 so Monday's run uses fusion", not
+  "ADR 0085 fusion stack"; "owner decides on Tue optimizer flip from Mon run", not
+  "conviction optimizer". The `scope` line is only a starting point; the screen (latest
+  plan, next steps, recap) decides. If no finish line is visible, say "no finish line on screen".
 - **Disposition** — `keep` (has live or scheduled work), `close out` (its work merged or
   was handed off and nothing is pending — say what proves it), `answer` (needs the user
   now), `check` (screen unreadable or ambiguous; say why).
