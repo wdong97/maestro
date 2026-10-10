@@ -27,7 +27,7 @@ def load_cb():
         fallback = Path.home() / "devel" / "agent-memory" / "bin" / "cb"
         path = str(fallback) if fallback.exists() else None
     if not path:
-        sys.exit("threadstatus: `cb` is not on PATH (it ships in the agent-memory repo)")
+        sys.exit("metastatus: `cb` is not on PATH (it ships in the agent-memory repo)")
     path = os.path.realpath(path)
     loader = importlib.machinery.SourceFileLoader("cb_cli", path)
     spec = importlib.util.spec_from_loader("cb_cli", loader)

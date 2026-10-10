@@ -1,9 +1,9 @@
 ---
-name: threadstatus
+name: metastatus
 description: One table per machine (WSL and Mac) of every live agent session — what it is working on, how far the work got, the goal, and whether to keep it, close it out, or answer it. Reads each session's last screen through `cb` and Orca; never messages anyone. Use when the user asks what the threads/sessions/agents are doing, which can be closed, or for status across machines.
 ---
 
-# threadstatus — every live session, one table per machine
+# metastatus — every live session, one table per machine
 
 Read-only. You read screens; you never `cb send`, never type into a terminal, never
 close anything. Closing is the user's call.
@@ -11,7 +11,7 @@ close anything. Closing is the user's call.
 ## 1. Collect (one command, ~10 s)
 
 ```bash
-python3 ~/.claude/skills/threadstatus/collect.py --out <scratch>/threads.json
+python3 ~/.claude/skills/metastatus/collect.py --out <scratch>/threads.json
 ```
 
 Use your scratchpad (or a temp dir) for `<scratch>`; the file holds raw screens and can
