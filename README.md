@@ -54,6 +54,10 @@ cb send wsl01/impl-auth "card S1.api is yours; files: api/auth.py, tests/test_au
 board claim S1.api --owner wsl01/impl-auth
 ```
 
+`cb send` never types over you. If the target's input box is empty, the message goes now.
+If you have something typed there, it waits until you send yours, then follows in order.
+`cb queue` shows what is waiting and why.
+
 `cb` reads `~/.config/maestro/cb.json` for this machine's name, the registry directory
 (a git checkout, if you want it shared), and the Orca environment name of each other
 machine. Without the file it uses the hostname and a local registry.
