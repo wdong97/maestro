@@ -33,6 +33,7 @@ import os
 import platform
 import re
 import secrets
+import secrets
 import shutil
 import subprocess
 import sys
@@ -234,6 +235,9 @@ MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
 SUBMIT_CHECK_SECONDS = 2.0
 CLEAR_RECHECK_SECONDS = 1.5
 ENTER_DELAY_SECONDS = 0.6
+TYPED_OK = re.compile(r"\bSent \d+ bytes\b")
+MESSAGE_ID = re.compile(r"\[cb#[0-9a-f]{6}")
+CB_HEADER = re.compile(r"\[cb(#[0-9a-f]{6})? from ")
 DRAFT_WAIT_SECONDS = 15 * 60
 DRAFT_POLL_SECONDS = 20
 DEFERRED_LOG = Path.home() / ".cache" / "cb-board" / "deferred.log"
@@ -260,21 +264,24 @@ def input_draft(target: dict) -> str | None:
             below = " ".join(tail[index + 1:])
             if MENU_OPTION.match(draft) and any(f in below for f in MENU_FOOTERS):
                 return MENU_OPEN  # a question menu is waiting; Enter would answer it
-            if not draft or draft.startswith("[cb from") or draft.startswith(PLACEHOLDERS):
+            if not draft or CB_HEADER.match(draft) is not None or draft.startswith(PLACEHOLDERS):
                 return None
             return draft  # includes a collapsed paste: its author is unknown, so wait
     return None
 
 
 def deliver(target: dict, text: str) -> str:
-    """Type the message, then press Enter as a separate key, so a long paste cannot swallow it."""
+    """Type the message; press Enter only when this exact message is on the input line."""
 
     base = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
     out = run_orca(*base, "--text", text)
     receipt = out.strip().splitlines()[0] if out.strip() else "cb: send gave no receipt; check `cb who`"
+    if "input_accepted" not in out and TYPED_OK.search(out) is None:
+        return receipt + " (typing not confirmed; no Enter pressed)"
     time.sleep(ENTER_DELAY_SECONDS)
-    run_orca(*base, "--enter")
-    _confirm_submitted(target, text)
+    _submit_if_ours(target, text)
+    time.sleep(SUBMIT_CHECK_SECONDS)
+    _submit_if_ours(target, text)  # one retry if a long paste swallowed the first Enter
     return receipt
 
 
@@ -286,18 +293,16 @@ def _screen_tail(target: dict) -> list[str]:
         return []
 
 
-def _confirm_submitted(target: dict, text: str) -> None:
-    """Retry only a message that is provably ours and still unsubmitted.
+def _submit_if_ours(target: dict, text: str) -> None:
+    """Press Enter (Tab when Codex is busy) only if the input line starts with this message's id.
 
-    Proof is the exact `[cb from <sender> to <label>]` header of this message at the start of
-    the input line; the header is short enough not to wrap. Any other text (a person's draft
-    or paste, or a collapsed paste we cannot identify) is never submitted.
+    The id is the first 11 characters, `[cb#xxxxxx`, so it never wraps and names one message.
+    Anything else on the line (a draft, a paste, a menu, an older message) is left alone.
     """
 
-    header = text.split("]", 1)[0] + "]"
-    if not header.startswith("[cb from "):
+    ident = MESSAGE_ID.match(text)
+    if ident is None:
         return
-    time.sleep(SUBMIT_CHECK_SECONDS)
     tail = _screen_tail(target)
     raw = None
     for line in reversed(tail):
@@ -305,7 +310,7 @@ def _confirm_submitted(target: dict, text: str) -> None:
         if stripped.startswith(PROMPT_GLYPHS):
             raw = stripped[1:].strip()
             break
-    if not raw or not raw.startswith(header):
+    if not raw or not raw.startswith(ident.group(0)):
         return
     busy = any("tab to queue message" in line for line in tail[-6:])
     args = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
@@ -336,7 +341,7 @@ def cmd_send(a: argparse.Namespace) -> None:
     if target["state"] == "gone":
         sys.exit(f"cb: {a.label}'s terminal is gone; ask it to re-register. Not sent.")
     sender = my_label(entries) or f"{MACHINE}/unregistered"
-    text = f"[cb from {sender} to {a.label}] " + " ".join(a.message)
+    text = f"[cb#{secrets.token_hex(3)} from {sender} to {a.label}] " + " ".join(a.message)
     if a.wait_clear:
         _wait_then_deliver(target, text, a.label)
         return
@@ -354,7 +359,7 @@ def cmd_send(a: argparse.Namespace) -> None:
 def _wait_then_deliver(target: dict, text: str, label: str) -> None:
     sender = os.environ.get("CB_SENDER_LABEL")
     if sender:
-        text = re.sub(r"^\[cb from [^ ]+ ", f"[cb from {sender} ", text, count=1)
+        text = re.sub(r"^\[cb(#[0-9a-f]{6})? from [^ ]+ ", lambda mm: f"[cb{mm.group(1) or ''} from {sender} ", text, count=1)
     _log_deferred(f"waiting  {label}")
     deadline = time.time() + DRAFT_WAIT_SECONDS
     while time.time() < deadline:
