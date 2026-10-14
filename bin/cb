@@ -233,7 +233,7 @@ UNREADABLE = "<screen unreadable>"
 MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
 SUBMIT_CHECK_SECONDS = 2.0
 CLEAR_RECHECK_SECONDS = 1.5
-SUBMIT_LEFTOVER = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
+SUBMIT_LEFTOVER = re.compile(r"\[Pasted [Cc]ontent (\d+) chars\]")
 DRAFT_WAIT_SECONDS = 15 * 60
 DRAFT_POLL_SECONDS = 20
 DEFERRED_LOG = Path.home() / ".cache" / "cb-board" / "deferred.log"
@@ -270,7 +270,7 @@ def deliver(target: dict, text: str) -> str:
     out = run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"],
                    "--enter", "--text", text)
     receipt = out.strip().splitlines()[0] if out.strip() else "cb: send gave no receipt; check `cb who`"
-    _confirm_submitted(target)
+    _confirm_submitted(target, text)
     return receipt
 
 
@@ -282,11 +282,12 @@ def _screen_tail(target: dict) -> list[str]:
         return []
 
 
-def _confirm_submitted(target: dict) -> None:
+def _confirm_submitted(target: dict, text: str) -> None:
     """A long message can sit unsubmitted as a collapsed paste (Codex) or a leftover line.
 
-    After typing, re-read the input line once. If our own text or a collapsed paste is still
-    there, press Enter when the session is idle, or Tab (queue) when Codex is busy.
+    After typing, re-read the input line once. Act only on text that is provably the
+    message just sent: the start of our own [cb from ...] line, or a collapsed paste whose
+    character count equals our message. A person's own paste or draft is never submitted.
     """
     time.sleep(SUBMIT_CHECK_SECONDS)
     tail = _screen_tail(target)
@@ -296,7 +297,11 @@ def _confirm_submitted(target: dict) -> None:
         if stripped.startswith(PROMPT_GLYPHS):
             raw = stripped[1:].strip()
             break
-    if not raw or not (raw.startswith("[cb from") or SUBMIT_LEFTOVER.match(raw)):
+    ours = bool(raw) and raw.startswith(text[:60].strip())
+    paste = SUBMIT_LEFTOVER.match(raw or "")
+    if paste is not None and int(paste.group(1)) == len(text):
+        ours = True
+    if not ours:
         return
     busy = any("tab to queue message" in line for line in tail[-6:])
     key = "\t" if busy else ""
