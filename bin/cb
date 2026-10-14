@@ -234,7 +234,7 @@ UNREADABLE = "<screen unreadable>"
 MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
 SUBMIT_CHECK_SECONDS = 2.0
 CLEAR_RECHECK_SECONDS = 1.5
-ENTER_DELAY_SECONDS = 0.6
+ENTER_DELAY_SECONDS = 1.5
 COLLAPSED = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
 TYPED_OK = re.compile(r"\bSent \d+ bytes\b")
 MESSAGE_ID = re.compile(r"\[cb#[0-9a-f]{6}")
@@ -283,7 +283,7 @@ def deliver(target: dict, text: str, *, verified_empty: bool = False) -> str:
     # The line was empty on two reads just before typing, so a collapsed paste now is ours.
     pressed = _submit_if_ours(target, text, just_typed=verified_empty)
     time.sleep(SUBMIT_CHECK_SECONDS)
-    if _submit_if_ours(target, text):  # our id still visible: the first Enter was swallowed
+    if _submit_if_ours(target, text, just_typed=verified_empty):  # first key was swallowed
         pressed = True
         time.sleep(SUBMIT_CHECK_SECONDS)
         if _still_ours(target, text):
