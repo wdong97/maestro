@@ -26,6 +26,7 @@ Config: ~/.config/maestro/cb.json (or $CB_CONFIG), all keys optional:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import html
 import json
@@ -236,6 +237,8 @@ SUBMIT_CHECK_SECONDS = 2.0
 CLEAR_RECHECK_SECONDS = 1.5
 ENTER_DELAY_SECONDS = 1.5
 COLLAPSED = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
+# Codex shows a long paste as "[Pasted Content N chars]": N equal to len(message) identifies ours.
+COLLAPSED_CHARS = re.compile(r"\[Pasted [Cc]ontent (\d+) chars\]")
 TYPED_OK = re.compile(r"\bSent \d+ bytes\b")
 MESSAGE_ID = re.compile(r"\[cb#[0-9a-f]{6}")
 CB_HEADER = re.compile(r"\[cb(#[0-9a-f]{6})? from ")
@@ -276,6 +279,7 @@ def deliver(target: dict, text: str, *, verified_empty: bool = False) -> str:
 
     base = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
     out = run_orca(*base, "--text", text)
+    _record_typed(target, text)
     receipt = out.strip().splitlines()[0] if out.strip() else "cb: send gave no receipt; check `cb who`"
     if "input_accepted" not in out and TYPED_OK.search(out) is None:
         return receipt + " (typing not confirmed; no Enter pressed)"
@@ -322,12 +326,87 @@ def _submit_if_ours(target: dict, text: str, *, just_typed: bool = False) -> boo
             break
     if not raw:
         return False
-    collapsed = COLLAPSED.match(raw) is not None and just_typed
-    if not (raw.startswith(ident.group(0)) or collapsed):
+    if not (raw.startswith(ident.group(0)) or _our_collapse(raw, text, just_typed)):
         return False
     busy = any("tab to queue message" in line for line in tail[-6:])
     args = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
     run_orca(*args, *(["--text", "\t"] if busy else ["--enter"]))
+    return True
+
+
+def _our_collapse(raw: str, text: str, just_typed: bool) -> bool:
+    """A collapsed paste is ours when Codex's char count equals this message's length, or,
+    for a paste with no count, only right after cb typed into a verified-empty line."""
+
+    sized = COLLAPSED_CHARS.fullmatch(raw)
+    if sized is not None:
+        return int(sized.group(1)) == len(text)
+    return just_typed and COLLAPSED.match(raw) is not None
+
+
+class _TerminalLock:
+    """One cb delivery at a time per target terminal on this machine, so two waiters never
+    type into the same line together."""
+
+    def __init__(self, target: dict) -> None:
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{target['machine']}-{target['terminal']}")
+        self.path = DEFERRED_LOG.parent / "locks" / f"{name}.lock"
+
+    def __enter__(self) -> "_TerminalLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = self.path.open("w")
+        fcntl.flock(self.fh, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        fcntl.flock(self.fh, fcntl.LOCK_UN)
+        self.fh.close()
+
+
+TYPED_TTL_SECONDS = 3600
+
+
+def _typed_ledger(target: dict) -> Path:
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{target['machine']}-{target['terminal']}")
+    return DEFERRED_LOG.parent / "typed" / f"{name}.jsonl"
+
+
+def _record_typed(target: dict, text: str) -> None:
+    ident = MESSAGE_ID.match(text)
+    path = _typed_ledger(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"id": ident.group(0) if ident else None, "chars": len(text), "at": time.time()}) + "\n")
+
+
+def _release_stuck_own(target: dict) -> bool:
+    """If the input line holds exactly one earlier cb message from this machine (its id, or
+    a Codex collapse whose char count matches one typed here in the last hour), submit it."""
+
+    tail = _screen_tail(target)
+    raw = None
+    for line in reversed(tail):
+        stripped = line.strip()
+        if stripped.startswith(PROMPT_GLYPHS):
+            raw = stripped[1:].strip()
+            break
+    if not raw:
+        return False
+    try:
+        rows = [json.loads(x) for x in _typed_ledger(target).read_text(encoding="utf-8").splitlines() if x.strip()]
+    except OSError:
+        return False
+    recent = [r for r in rows if time.time() - r.get("at", 0) < TYPED_TTL_SECONDS]
+    sized = COLLAPSED_CHARS.fullmatch(raw)
+    ours = (sized is not None and any(r.get("chars") == int(sized.group(1)) for r in recent)) or any(
+        r.get("id") and raw.startswith(r["id"]) and raw.count("[cb#") == 1 for r in recent
+    )
+    if not ours:
+        return False
+    busy = any("tab to queue message" in line for line in tail[-6:])
+    args = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
+    run_orca(*args, *(["--text", "\t"] if busy else ["--enter"]))
+    _log_deferred(f"released {target['terminal']} an earlier cb message stuck on the input line")
     return True
 
 
@@ -344,7 +423,8 @@ def _still_ours(target: dict, text: str) -> bool:
     for line in reversed(_screen_tail(target)):
         stripped = line.strip()
         if stripped.startswith(PROMPT_GLYPHS):
-            return bool(ident) and stripped[1:].strip().startswith(ident.group(0))
+            raw = stripped[1:].strip()
+            return bool(ident) and (raw.startswith(ident.group(0)) or _our_collapse(raw, text, False))
     return False
 
 
@@ -376,9 +456,10 @@ def cmd_send(a: argparse.Namespace) -> None:
     if a.wait_clear:
         _wait_then_deliver(target, text, a.label)
         return
-    if input_clear_twice(target):
-        print(deliver(target, text, verified_empty=True))
-        return
+    with _TerminalLock(target):
+        if input_clear_twice(target):
+            print(deliver(target, text, verified_empty=True))
+            return
     # Someone is typing there: hand the message to a detached waiter and return at once.
     subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "send", "--wait-clear", a.label, *a.message],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -395,9 +476,12 @@ def _wait_then_deliver(target: dict, text: str, label: str) -> None:
     deadline = time.time() + DRAFT_WAIT_SECONDS
     while time.time() < deadline:
         time.sleep(DRAFT_POLL_SECONDS)
-        if input_clear_twice(target):
-            _log_deferred(f"sent     {label} {deliver(target, text, verified_empty=True)}")
-            return
+        with _TerminalLock(target):
+            if _release_stuck_own(target):
+                time.sleep(SUBMIT_CHECK_SECONDS)
+            if input_clear_twice(target):
+                _log_deferred(f"sent     {label} {deliver(target, text, verified_empty=True)}")
+                return
     state = input_draft(target)
     if state is None:
         _log_deferred(f"sent     {label} {deliver(target, text)}")
