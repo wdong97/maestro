@@ -380,8 +380,9 @@ def _record_typed(target: dict, text: str) -> None:
 
 
 def _release_stuck_own(target: dict) -> bool:
-    """If the input line holds exactly one earlier cb message from this machine (its id, or
-    a Codex collapse whose char count matches one typed here in the last hour), submit it."""
+    """If the input line holds exactly one earlier cb message typed from this machine in the
+    last hour, identified by its visible id, submit it. A collapsed paste is never released:
+    its length alone cannot prove who pasted it."""
 
     tail = _screen_tail(target)
     raw = None
@@ -392,15 +393,20 @@ def _release_stuck_own(target: dict) -> bool:
             break
     if not raw:
         return False
+    rows = []
     try:
-        rows = [json.loads(x) for x in _typed_ledger(target).read_text(encoding="utf-8").splitlines() if x.strip()]
+        lines = _typed_ledger(target).read_text(encoding="utf-8").splitlines()
     except OSError:
         return False
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
     recent = [r for r in rows if time.time() - r.get("at", 0) < TYPED_TTL_SECONDS]
-    sized = COLLAPSED_CHARS.fullmatch(raw)
-    ours = (sized is not None and any(r.get("chars") == int(sized.group(1)) for r in recent)) or any(
-        r.get("id") and raw.startswith(r["id"]) and raw.count("[cb#") == 1 for r in recent
-    )
+    ours = raw.count("[cb#") == 1 and any(r.get("id") and raw.startswith(r["id"]) for r in recent)
     if not ours:
         return False
     busy = any("tab to queue message" in line for line in tail[-6:])
@@ -484,7 +490,8 @@ def _wait_then_deliver(target: dict, text: str, label: str) -> None:
                 return
     state = input_draft(target)
     if state is None:
-        _log_deferred(f"sent     {label} {deliver(target, text)}")
+        with _TerminalLock(target):
+            _log_deferred(f"sent     {label} {deliver(target, text)}")
         return
     # Never press Enter over a menu, an unread screen, or someone's unfinished draft.
     _log_deferred(f"undelivered {label}: the input line stayed busy for {DRAFT_WAIT_SECONDS // 60} min "
