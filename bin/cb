@@ -233,7 +233,7 @@ UNREADABLE = "<screen unreadable>"
 MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
 SUBMIT_CHECK_SECONDS = 2.0
 CLEAR_RECHECK_SECONDS = 1.5
-SUBMIT_LEFTOVER = re.compile(r"\[Pasted [Cc]ontent (\d+) chars\]")
+ENTER_DELAY_SECONDS = 0.6
 DRAFT_WAIT_SECONDS = 15 * 60
 DRAFT_POLL_SECONDS = 20
 DEFERRED_LOG = Path.home() / ".cache" / "cb-board" / "deferred.log"
@@ -267,9 +267,13 @@ def input_draft(target: dict) -> str | None:
 
 
 def deliver(target: dict, text: str) -> str:
-    out = run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"],
-                   "--enter", "--text", text)
+    """Type the message, then press Enter as a separate key, so a long paste cannot swallow it."""
+
+    base = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
+    out = run_orca(*base, "--text", text)
     receipt = out.strip().splitlines()[0] if out.strip() else "cb: send gave no receipt; check `cb who`"
+    time.sleep(ENTER_DELAY_SECONDS)
+    run_orca(*base, "--enter")
     _confirm_submitted(target, text)
     return receipt
 
@@ -283,12 +287,16 @@ def _screen_tail(target: dict) -> list[str]:
 
 
 def _confirm_submitted(target: dict, text: str) -> None:
-    """A long message can sit unsubmitted as a collapsed paste (Codex) or a leftover line.
+    """Retry only a message that is provably ours and still unsubmitted.
 
-    After typing, re-read the input line once. Act only on text that is provably the
-    message just sent: the start of our own [cb from ...] line, or a collapsed paste whose
-    character count equals our message. A person's own paste or draft is never submitted.
+    Proof is the exact `[cb from <sender> to <label>]` header of this message at the start of
+    the input line; the header is short enough not to wrap. Any other text (a person's draft
+    or paste, or a collapsed paste we cannot identify) is never submitted.
     """
+
+    header = text.split("]", 1)[0] + "]"
+    if not header.startswith("[cb from "):
+        return
     time.sleep(SUBMIT_CHECK_SECONDS)
     tail = _screen_tail(target)
     raw = None
@@ -297,16 +305,11 @@ def _confirm_submitted(target: dict, text: str) -> None:
         if stripped.startswith(PROMPT_GLYPHS):
             raw = stripped[1:].strip()
             break
-    ours = bool(raw) and raw.startswith(text[:60].strip())
-    paste = SUBMIT_LEFTOVER.match(raw or "")
-    if paste is not None and int(paste.group(1)) == len(text):
-        ours = True
-    if not ours:
+    if not raw or not raw.startswith(header):
         return
     busy = any("tab to queue message" in line for line in tail[-6:])
-    key = "\t" if busy else ""
     args = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
-    run_orca(*args, *(["--text", key] if busy else ["--enter"]))
+    run_orca(*args, *(["--text", "\t"] if busy else ["--enter"]))
 
 
 def input_clear_twice(target: dict) -> bool:
