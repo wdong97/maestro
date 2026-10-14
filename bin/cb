@@ -288,10 +288,10 @@ def deliver(target: dict, text: str, *, verified_empty: bool = False) -> str:
         time.sleep(SUBMIT_CHECK_SECONDS)
         if _still_ours(target, text):
             return receipt + " (NOT SUBMITTED: the message is still on the input line)"
-    elif pressed and _collapsed_now(target):
+    if pressed and _collapsed_now(target):
         return receipt + " (NOT CONFIRMED: a collapsed paste is still on the input line)"
     if not pressed:
-        return receipt + " (NOT SUBMITTED: the input line did not show this message)"
+        return receipt + " (unconfirmed: the message was not seen on the input line; it may already be submitted)"
     return receipt
 
 
