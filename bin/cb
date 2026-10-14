@@ -240,6 +240,7 @@ MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
 SUBMIT_CHECK_SECONDS = 2.0
 CLEAR_RECHECK_SECONDS = 1.5
 ENTER_DELAY_SECONDS = 1.5
+SUBMIT_RETRIES = 5
 COLLAPSED = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
 # Codex shows a long paste as "[Pasted Content N chars]": N equal to len(message) identifies ours.
 COLLAPSED_CHARS = re.compile(r"\[Pasted [Cc]ontent (\d+) chars\]")
@@ -291,9 +292,14 @@ def deliver(target: dict, text: str, *, verified_empty: bool = False) -> str:
     # The line was empty on two reads just before typing, so a collapsed paste now is ours.
     pressed = _submit_if_ours(target, text, just_typed=verified_empty)
     time.sleep(SUBMIT_CHECK_SECONDS)
-    if _submit_if_ours(target, text):  # our id still visible: the first key was swallowed
+    # While our own id is still visible the earlier key was swallowed (a slow paste):
+    # retry a few times; the id proves the line holds this message and nothing else.
+    for _ in range(SUBMIT_RETRIES):
+        if not _submit_if_ours(target, text):
+            break
         pressed = True
         time.sleep(SUBMIT_CHECK_SECONDS)
+    else:
         if _still_ours(target, text):
             return receipt + " (NOT SUBMITTED: the message is still on the input line)"
     if pressed and _collapsed_now(target):
