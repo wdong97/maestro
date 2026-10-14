@@ -234,17 +234,17 @@ def cmd_who(a: argparse.Namespace) -> None:
             print(f"  {u['machine']}  {u['state']:<5} {u['title'][:60]}")
 
 
-PROMPT_GLYPHS = ("❯", "›")  # Claude Code and Codex input lines
-CODEX_GLYPH = "›"
+PROMPT_GLYPHS = ("\u276f", "\u203a")  # Claude Code and Codex input lines
+CODEX_GLYPH = "\u203a"
 PLACEHOLDERS = ("Ask Codex to do anything", 'Try "')
 MENU_OPTION = re.compile(r"\d+\. ")
 # Footers of Claude Code question menus and permission prompts (both answer on Enter).
 MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
-MESSAGE_ID = re.compile(r"\[cb#[0-9a-f]{6}")
-CB_HEADER = re.compile(r"\[cb(#[0-9a-f]{6})? from ")
-# Codex shows a long paste as "[Pasted Content N chars]": N equal to len(message) identifies ours.
-COLLAPSED_CHARS = re.compile(r"\[Pasted [Cc]ontent (\d+) chars\]")
-STUCK = "an earlier cb message is waiting in the box"
+# A long paste shows as "[Pasted Content N chars]" (Codex) or "[Pasted text #1 ...]" (Claude):
+# its author cannot be told from the screen, so cb never presses Enter on one.
+COLLAPSED = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
+PROMPT_WINDOW = 12  # the live input line sits at the bottom; older prompts higher up are history
+STUCK = "our earlier message is in the box, not yet submitted"
 QUEUE_DIR = Path.home() / ".cache" / "cb-board" / "queue"
 DELIVERY_LOG = Path.home() / ".cache" / "cb-board" / "deferred.log"
 POLL_SECONDS = 3
@@ -264,48 +264,62 @@ def _read_input(target: dict) -> tuple[list[str] | None, str]:
         return None, ""
 
 
+def _agent_running(target: dict) -> bool | None:
+    out = run_orca("terminal", "show", *env_args(target["machine"]), "--terminal", target["terminal"], "--json")
+    try:
+        result = json.loads(out)["result"]
+        return bool((result.get("terminal") or result).get("agentIdentity"))
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
 def _input_line(tail: list[str]) -> tuple[int, str] | None:
-    for index in range(len(tail) - 1, -1, -1):
+    for index in range(len(tail) - 1, max(-1, len(tail) - 1 - PROMPT_WINDOW), -1):
         stripped = tail[index].strip()
         if stripped.startswith(PROMPT_GLYPHS):
             return index, stripped[1:].strip()
     return None
 
 
-def input_state(target: dict) -> str | None:
+def input_state(target: dict, own: str | None = None) -> str | None:
     """None when the target's input box is empty and its agent can take a message; otherwise
-    the reason delivery waits. Anything a person has typed, in the terminal or in Orca's
-    compose box, makes the message wait until they send it."""
+    the reason delivery waits. Anything in the box, on the terminal line or in Orca's compose
+    box, waits for a person to send it, except our own message `own` (a cb#id), which is STUCK."""
+    running = _agent_running(target)
+    if running is None:
+        return "screen unreadable"
+    if not running:
+        return "no agent running in that terminal"
     tail, draft = _read_input(target)
     if tail is None:
         return "screen unreadable"
-    if draft:
-        return STUCK if CB_HEADER.match(draft) else "someone is typing"
     found = _input_line(tail)
     if found is None:
-        return "no agent prompt (the agent may have exited to a shell)"
+        return "no agent prompt on screen"
     index, line = found
     if MENU_OPTION.match(line) and any(f in " ".join(tail[index + 1:]) for f in MENU_FOOTERS):
         return "a question menu is open"
-    if line and not line.startswith(PLACEHOLDERS):
-        return STUCK if CB_HEADER.match(line) else "someone is typing"
+    line = "" if line.startswith(PLACEHOLDERS) else line
+    for box in (draft, line):
+        if box:
+            return STUCK if own and box.startswith(f"[cb#{own}") else "someone is typing"
     if tail[index].strip().startswith(CODEX_GLYPH) and any("esc to interrupt" in t for t in tail[max(0, index - 4):index]):
         return "codex is mid-turn"  # Claude takes a message mid-turn; Codex waits for its turn to end
     return None
 
 
-def _on_line(target: dict, text: str) -> bool:
-    """This message is still unsent in the box: its id leads the line, or Codex's collapsed
-    paste has exactly its length."""
-    ident = MESSAGE_ID.match(text)
+def _on_line(target: dict, ident: str) -> bool | None:
+    """True while message cb#ident is still in the box, False once the box is seen without it,
+    None when that cannot be told (unreadable screen, or a collapsed paste that hides it)."""
     tail, draft = _read_input(target)
-    found = _input_line(tail or [])
-    for box in (draft, found[1] if found else ""):
-        if ident and box.startswith(ident.group(0)):
-            return True
-        sized = COLLAPSED_CHARS.fullmatch(box)
-        if sized and int(sized.group(1)) == len(text):
-            return True
+    if tail is None:
+        return None
+    found = _input_line(tail)
+    boxes = (draft, found[1] if found else "")
+    if any(box.startswith(f"[cb#{ident}") for box in boxes):
+        return True
+    if any(COLLAPSED.match(box) for box in boxes):
+        return None
     return False
 
 
@@ -313,22 +327,25 @@ def _press_enter(target: dict) -> None:
     run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"], "--enter")
 
 
-def deliver(target: dict, text: str) -> str:
-    """Type and submit in one Orca call, then confirm the box no longer holds the message."""
+def deliver(target: dict, text: str, ident: str) -> str:
+    """Type and submit in one Orca call; "delivered" only once the box is seen without it,
+    "typed" when it may still be in the box, "not accepted" when nothing was typed."""
     out = run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"],
                    "--text", text, "--enter", "--json")
     try:
         accepted = bool(json.loads(out)["result"]["send"]["accepted"])
     except (ValueError, KeyError, TypeError):
         accepted = False
-    if not accepted and not _on_line(target, text):
+    if not accepted and _on_line(target, ident) is False:
         return "not accepted"
     for _ in range(SUBMIT_TRIES):
         time.sleep(SUBMIT_CHECK_SECONDS)
-        if not _on_line(target, text):
+        seen = _on_line(target, ident)
+        if seen is False:
             return "delivered"
-        _press_enter(target)
-    return "typed but NOT SUBMITTED; it is still in the box"
+        if seen and input_state(target, own=ident) == STUCK:
+            _press_enter(target)
+    return "typed"
 
 
 class _Lock:
@@ -372,14 +389,18 @@ def _queue_rows(path: Path) -> list[dict]:
     return rows
 
 
-def _queue_edit(path: Path, *, add: dict | None = None, drop: set[str] | None = None) -> list[dict]:
+def _queue_edit(path: Path, *, add: dict | None = None, drop: set[str] | None = None,
+                mark: set[str] | None = None, typed: str | None = None) -> list[dict]:
     with _Lock(path.with_suffix(".lock")):
         rows = _queue_rows(path)
         if add is not None:
             rows.append(add)
         if drop:
             rows = [r for r in rows if r.get("id") not in drop]
-        if add is not None or drop:
+        for r in rows:
+            if mark and r.get("id") in mark:
+                r["typed"] = typed
+        if add is not None or drop or mark:
             tmp = path.with_suffix(".tmp")
             with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as fh:
                 fh.writelines(json.dumps(r) + "\n" for r in rows)
@@ -407,6 +428,7 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
             if not mine:
                 return results, "another cb delivery for this session is already waiting"
             last_reason = None
+            presses = 0
             while True:
                 rows = _queue_edit(path)
                 if not rows:
@@ -417,25 +439,40 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                     if row["target"] != target:
                         break
                     batch.append(row)
-                reason = input_state(target)
-                if reason == STUCK:
-                    _press_enter(target)  # a cb message, not a person's draft: send it on
-                    _log_delivery(f"released {label}: submitted a cb message left in the box")
-                    time.sleep(SUBMIT_CHECK_SECONDS)
-                    reason = input_state(target)
-                if reason is None:
-                    time.sleep(CLEAR_RECHECK_SECONDS)  # a second clear read narrows the race with a typist
-                    reason = input_state(target)
-                if reason is None:
-                    text = " ".join(r["text"] for r in batch)
-                    result = deliver(target, text)
-                    _log_delivery(f"{'sent    ' if result == 'delivered' else 'trouble '} {label} "
-                                  f"({len(batch)} message(s)): {result}")
-                    results.append(f"{len(batch)} message(s) to {label}: {result}")
-                    if result != "not accepted":
-                        _queue_edit(path, drop={r["id"] for r in batch})
+                typed = [r for r in rows if r.get("typed")]
+                if typed:
+                    # Typed earlier but not seen submitted: wait for the box to show it gone.
+                    lead = typed[0]["typed"]
+                    seen = _on_line(typed[0]["target"], lead)
+                    if seen is False:
+                        _queue_edit(path, drop={r["id"] for r in typed})
+                        _log_delivery(f"sent     {label} ({len(typed)} message(s)): submitted after a wait")
+                        results.append(f"{len(typed)} message(s) to {label}: delivered")
                         continue
-                    reason = "orca did not accept the send"
+                    reason = STUCK if seen else "cannot tell yet whether our message was submitted"
+                    if seen and presses < SUBMIT_TRIES and input_state(typed[0]["target"], own=lead) == STUCK:
+                        _press_enter(typed[0]["target"])
+                        presses += 1
+                        time.sleep(SUBMIT_CHECK_SECONDS)
+                        continue
+                else:
+                    reason = input_state(target)
+                    if reason is None:
+                        time.sleep(CLEAR_RECHECK_SECONDS)  # a second clear read narrows the race with a typist
+                        reason = input_state(target)
+                    if reason is None:
+                        text = " ".join(r["text"] for r in batch)
+                        result = deliver(target, text, batch[0]["id"])
+                        if result == "delivered":
+                            _queue_edit(path, drop={r["id"] for r in batch})
+                            _log_delivery(f"sent     {label} ({len(batch)} message(s)): delivered")
+                            results.append(f"{len(batch)} message(s) to {label}: delivered")
+                            continue
+                        if result == "typed":
+                            _queue_edit(path, mark={r["id"] for r in batch}, typed=batch[0]["id"])
+                            presses = SUBMIT_TRIES  # deliver() already pressed Enter that many times
+                            continue
+                        reason = "orca did not accept the send"
                 if reason != last_reason:
                     _log_delivery(f"waiting  {label} ({len(rows)} queued): {reason}")
                     last_reason = reason
@@ -464,8 +501,9 @@ def cmd_send(a: argparse.Namespace) -> None:
     target = next((e for e in entries if e["label"] == a.label), None)
     if not target:
         sys.exit(f"cb: no session is registered as {a.label}; run `cb who`. Not sent.")
-    if target["state"] == "gone":
-        sys.exit(f"cb: {a.label}'s terminal is gone; ask it to re-register. Not sent.")
+    if target["state"] in ("gone", "shell"):
+        sys.exit(f"cb: {a.label}'s terminal is {'gone' if target['state'] == 'gone' else 'a shell with no agent'}; "
+                 f"ask it to re-register. Not sent.")
     sender = my_label(entries) or f"{MACHINE}/unregistered"
     ident = secrets.token_hex(3)
     text = f"[cb#{ident} from {sender} to {a.label}] " + " ".join(a.message)
