@@ -1,0 +1,9 @@
+{
+  "name": "maestro",
+  "version": "0.1.0",
+  "description": "Run a shop of coding-agent sessions: registry and messaging across machines, role briefs, a shared board with gates, and Claude+Codex duel, delegate, and review-before-push.",
+  "author": { "name": "wdong97", "url": "https://github.com/wdong97" },
+  "repository": "https://github.com/wdong97/maestro",
+  "license": "MIT",
+  "keywords": ["orchestration", "multi-agent", "claude-code", "codex", "skills"]
+}

@@ -1,0 +1,203 @@
+# maestro tour
+
+Every command and skill, one section each. The [README](../README.md) has the short version.
+
+
+**Two models, one answer — `duel`.** Claude and Codex answer the same prompt in
+side-by-side tmux panes; the orchestrator reads both and synthesizes the best
+result. Add `--rw` to have each implement in its own git worktree, then merge the
+winner. In Claude: `/duel`. In Codex: `$duel`.
+
+**Hand work to another model — `delegate`.** Keep planning and taste in your
+current session; dispatch mechanical/bulk work to any implementer you pick:
+
+```bash
+ensemble delegate --to <model> [--eff low|medium|high|xhigh] [--ro] "<spec>"
+# --to: opus | fable | sonnet | haiku | codex | any full model id
+```
+
+Friendly names aren't version-pinned — they pass through to each CLI, which resolves
+them to its own current latest (`codex` uses your `~/.codex/config.toml` model), so
+`--to opus` always means today's Opus. Pass a full id to pin a specific version.
+
+It auto-routes to the Codex or Claude CLI by model name, runs in the background,
+and shows in `ensemble jobs`. For a *watchable* peer in a tmux window instead, use
+`ensemble spawn <claude|codex> "<task>"`.
+
+**Review before every push.** A global `pre-push` hook has the *other* agent review
+your diff and prompt before it leaves. Bypass once with `ENSEMBLE_REVIEW=0 git push`.
+On demand: `ensemble review` (or `/ensemble-review`).
+
+**See everything — `jobs` / `tail` / `dash`.** Every run (duel, spawn, delegation,
+review) is listed with status, from any terminal:
+
+```bash
+ensemble jobs                 # one-shot list of all runs
+ensemble tail <name|last>     # follow one run's output live
+ensemble dash                 # interactive TUI: runs grouped by what needs you, live resource view (`p`), `?` for help
+ensemble web [port] [--lan] [--board DIR …]   # browser app: runs + kanban tabs (watch + stop/reap, token-gated)
+ensemble ps [--by rss]        # task-manager: system RAM-in-use %, agents sorted by CPU/RAM w/ %MEM + project
+ensemble ps --stints          # per open session (process tree summed): RAM % of total, CPU, #procs, project
+```
+
+`web` is the whole thing in a browser. The **Runs** tab groups every run into **NEEDS
+YOU** (just finished, not yet opened), **RUNNING**, **DONE**, and **IDLE/RECLAIMABLE** —
+live resource gauges, click a run to expand its output, **stop** buttons on live runs,
+and a reclaim panel (select all or none, uncheck what to keep, close the rest). Each
+`--board DIR` adds a color-coded **project tab** — a **Board** (kanban) and **Roadmap**
+(slices, gates, sign-off) read from `DIR/orchestration/board-state.json`, remembered once
+registered — and runs working inside that project are tinted with its color. Every data
+and action call is gated by a token printed at startup, and it binds `127.0.0.1` unless
+you pass `--lan` (for a browser on another host, e.g. WSL → Windows).
+
+```bash
+ensemble web --lan --board ~/proj-a --board ~/proj-b   # runs cockpit + a tab per project board
+```
+
+`dash` is the same lanes in a terminal, and rings the bell when a run finishes. It's
+read-only — keystrokes never reach a live agent — apart from two actions that both ask
+first: `x` stops the selected run, `R` reaps idle sessions. (NEEDS-YOU window:
+`ENSEMBLE_DASH_RECENT_MIN`, default 30.)
+
+Runs get a short, readable **auto-name** at launch — a fast `claude` (haiku) call turns
+the prompt into a slug like `auth-tokenstore-refactor`. Display-only, the run's stable id
+is unchanged; disable with `ENSEMBLE_AUTONAME=0`.
+
+**Reclaim RAM — `reap` / `stop`.** Idle agents and dev servers add up. List what's
+worth closing, keep the ones you still want, and close the rest:
+
+```bash
+ensemble reap --dry-run       # numbered list of idle sessions + dev servers (RAM each + total)
+ensemble reap                 # keep the ones you name; close the rest on a y/N confirm
+ensemble stop <name>          # gracefully stop one run (SIGTERM→SIGKILL its tree) — dash's `x`
+```
+
+`reap` never closes the session you run it from.
+
+**Measure it — `report`.** A performance snapshot from real logged usage (reviews
+run, findings raised by severity, delegation success rate, tokens). See
+[PERFORMANCE.md](PERFORMANCE.md) for a committed snapshot; regenerate with:
+
+```bash
+ensemble report               # terminal summary
+ensemble report --md > PERFORMANCE.md
+```
+
+**Track the work — `board`.** A shared, server-less Kanban + roadmap board that
+humans and agents both update (`board-state.json` → live `dashboard.html`):
+
+```bash
+board init            # scaffold orchestration/ into a repo
+board serve           # open the live board (Board + Roadmap views)
+board claim S1.api --owner you   # claim → progress → review → done, with gates + sign-off
+```
+
+**Shared coding guidelines.** `guidelines/coding-guidelines.md` is `@import`ed into
+every Claude and Codex session (think-before-coding, simplicity, surgical changes).
+
+**Stay out of each other's way — `/standup`.** Trade status with every live agent
+session in the repo: each ping declares your own slice *and* asks for theirs, so the
+overlaps surface before two agents edit the same file. `peers.sh` shows the collision
+surface for free (no session is interrupted); the pings fill in intent; and when your
+slice lands you tell the peers you blocked that their file is free again.
+
+```bash
+~/.claude/skills/standup/scripts/peers.sh --repo   # who's live in this repo, HARD vs SOFT overlap
+/standup                                          # declare + ask every session in this repo, report the split
+/standup all                                      # widen to every agent on the machine
+/standup done "auth refactor landed on main"      # tell the peers you constrained that they're unblocked
+```
+
+**Write for the reader — `/plain-docs`.** A shared writing skill for anything a person
+reads: READMEs, setup guides, release notes, proposals, runbooks. It's team-neutral —
+your style guide wins — and both agents get it.
+
+```bash
+/plain-docs docs/SETUP.md            # revise a draft, keeping the author's voice
+/plain-docs "release note for v2 auth changes"   # draft one from scratch
+/plain-docs README.md --check        # review against the checklist, change nothing
+```
+
+**Explain it in plain words — `/eli5`.** For when an agent just did something and you
+want the short true version: what happened, one everyday analogy, and the decision it
+leaves you with. It re-tells, it never redoes — the facts and the plan stay put.
+
+```bash
+/eli5                                # explain the last thing the agent said or did
+/eli5 hooks/pre-push                 # explain a file, an error, a term, a command
+```
+
+**Where does this stand — `/recap`.** One skill for "where are we": it refreshes
+whatever may have gone stale (the PR and its checks, jobs you started, CI for the current
+commit, the branch, threads you linked), then states the session's goal *in the agent's
+own words, cited to yours*, and lists what's done, in progress, not proven, and dropped —
+with what proves each. Then blockers split into waiting-on-a-person vs blocked-on-
+something-technical, and next steps tagged `[me]` or `[you]`. Passing unit tests don't
+count as proof; CI green on this commit, the thing working where it'll be used, or a
+person confirming, do. It starts no new work. In Claude: `/recap`. In Codex: `$recap`.
+
+**End the session — `/closeout`.** For when the work is done but the agent keeps finding
+one more thing to improve. It names the goal you started the thread with and says how far
+it actually got, audits the rest of the scope against what's on disk, reports done / left
+/ not doing / needs you in plain English, finishes only the leftovers you approve, and
+then stops.
+
+```bash
+/closeout                            # audit, report, ask once, close
+```
+
+**Land every update — `/next-steps`.** Ends an update the way you'd want it: what it
+means in plain words, then at most three next steps, each with an owner and a size — or
+an explicit "nothing needed from you." No more asking "ok, what's next?"
+
+```bash
+/next-steps                          # summarize + state the next steps for what just happened
+```
+
+**Plan before touching anything — `/start-task`.** Always on: every new task starts with
+intake — frame the ask, explore, ask every real fork in one batch, then a one-minute
+plan — and the agent waits for your "go" before writing anything. Extras it spots along
+the way are parked for after. Calling a skill directly (`/tdd`, `/delegate`) gets the
+same intake.
+
+```bash
+/start-task "add dark mode to the dashboard"   # run intake explicitly on a task
+```
+
+**Which skills earn their keep — `/skill-audit`.** Counts which skills Claude and Codex
+actually use from your chat logs, maps duplicates and broken links, prices what every
+skill's description costs each session, and mines your own messages for requests you
+keep repeating. It only reports: pruning happens after you approve, into a dated
+archive you can restore from.
+
+```bash
+python3 ~/maestro/skills/skill-audit/scripts/audit.py   # or just ask for a skill audit
+```
+
+**Stop copy-pasting between agents — `/relay`.** One agent plans, one long-lived dev
+agent (Claude or Codex) builds. The planner drafts each prompt, you say "go", it sends
+it to the same dev session, then checks the dev agent's report against git and drafts
+the next. Watch any hop live in tmux.
+
+```bash
+ensemble relay new phase13 --to codex --dir ~/devel/currentbase-v2   # once
+/relay phase13                                                        # each hop
+```
+
+**Work until a goal is met — `/goal-loop`.** Give it a goal ("get p95 of /search under
+200ms", "ship CSV export"). It interviews you until the goal is checkable, writes a
+contract (`.goal/GOAL.md`) and an eval harness for you to approve, then locks the evals
+and hillclimbs on its own branch: one change per iteration, keep it if the score goes
+up, git-revert it if not, log either way. It stops when the goal is met, when progress
+stalls, or when the iteration or time budget runs out. Then it reports baseline → final,
+a held-out score it never saw, and what it tried. In Codex: `$goal-loop`.
+
+```bash
+/goal-loop "cut the bundle under 300KB without dropping features"
+python3 ~/maestro/skills/goal-loop/scripts/goalctl.py install-hook   # once, opt-in: keeps Claude looping
+```
+
+The hook edits `~/.claude/settings.json` (a global Stop hook), so it's opt-in rather
+than part of `install.sh`. It does nothing unless the project's `.goal/` says a loop is
+running. To pause one, run `touch .goal/PAUSE`.
+

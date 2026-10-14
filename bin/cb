@@ -1,0 +1,511 @@
+#!/usr/bin/env python3
+"""cb: name, find, message and watch agent sessions across the WSL box and the Mac.
+
+  cb register <label> --scope "<what this session handles>" [--session <agent session id>]
+  cb unregister [<label>]          (default: this terminal's entry)
+  cb who [--json]                  roster + live state on both machines
+  cb send <label> <message...>     refuses unknown labels and dead terminals; never guesses.
+                                   If someone is typing in the target's input line, the
+                                   message waits in the background and is typed once the
+                                   line is clear (at most 15 min, then sent marked delayed).
+                                   An open question menu is never answered: after 15 min
+                                   the message is logged as undelivered instead.
+  cb board [--port 8765]           live HTML dashboard (run on the WSL box)
+
+Labels are <machine>/<scope>, e.g. mac01/merger, wsl01/liaison. Each session is one
+JSON file in the registry dir; when that dir is a git checkout it is pulled and pushed, so
+two machines never edit the same file. Liveness and screens are read live through Orca.
+Config: ~/.config/maestro/cb.json (or $CB_CONFIG), all keys optional:
+  machine   this machine's name (default: short hostname)
+  registry  dir of session JSON files (default: ~/.config/maestro/registry)
+  remotes   {"<machine>": "<orca environment name>"} for every other machine
+  prs_repo  "owner/repo" whose open PRs the board shows
+  runs      {"<machine>": "<dir of run manifests>"} for the board's runs panel
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import html
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+try:
+    CFG = json.loads(Path(os.environ.get("CB_CONFIG") or Path.home() / ".config" / "maestro" / "cb.json").read_text())
+except (OSError, ValueError):
+    CFG = {}
+IS_MAC = platform.system() == "Darwin"
+MACHINE = os.environ.get("CB_MACHINE") or CFG.get("machine") or platform.node().split(".")[0].lower()
+REG = Path(os.environ.get("CB_REGISTRY") or CFG.get("registry") or Path.home() / ".config" / "maestro" / "registry").expanduser()
+REMOTES: dict[str, str] = CFG.get("remotes", {})  # other machine -> its Orca environment name here
+LABEL_RE = re.compile(r"^[a-z0-9-]+/[a-z0-9][a-z0-9-]{1,30}$")
+BUSY = set("◐◑◒◓⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✶✻✽·")
+NEEDS_YOU = re.compile(
+    r"Do you want to|Would you like to|❯ 1\. Yes|waiting for (the )?user|needs your approval|"
+    r"approve (it|this)|permission (prompt|check)",
+    re.I,
+)
+
+
+def orca() -> str:
+    if IS_MAC:
+        return shutil.which("orca") or "/Applications/Orca.app/Contents/Resources/bin/orca"
+    env = os.environ.get("ORCA_WSL_CLI_DIR")
+    if env and Path(env, "orca-ide").exists():
+        return str(Path(env, "orca-ide"))
+    found = sorted(glob.glob("/mnt/c/Users/*/AppData/Roaming/orca/wsl-managed-cli/*/orca-ide"),
+                   key=os.path.getmtime)
+    if not found:
+        sys.exit("cb: Orca CLI not found")
+    return found[-1]
+
+
+def run_orca(*args: str, timeout: int = 40) -> str:
+    try:
+        out = subprocess.run([orca(), *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return ""
+    return out.stdout
+
+
+def env_args(machine: str) -> list[str]:
+    return [] if machine == MACHINE else ["--environment", REMOTES[machine]]
+
+
+def sync(direction: str) -> None:
+    """Share the registry through git when it lives in a checkout; a plain dir needs no sync."""
+    stamp = Path.home() / ".cache" / "cb-board" / "last-pull"
+    if direction == "pull" and stamp.exists() and time.time() - stamp.stat().st_mtime < 45:
+        return
+    git = ["git", "-C", str(REG)]
+    if subprocess.run([*git, "rev-parse", "--is-inside-work-tree"], capture_output=True).returncode != 0:
+        return
+    run = lambda *a: subprocess.run([*git, *a], capture_output=True, timeout=60)  # noqa: E731
+    if direction == "push":
+        run("add", "-A", str(REG))
+        run("commit", "-q", "-m", f"cb: {MACHINE} registry")
+    run("pull", "--rebase", "--autostash", "-q")
+    if direction == "push":
+        run("push", "-q", "--no-verify")  # a registry edit must not trigger the pre-push code review
+    else:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
+
+
+def roster() -> list[dict]:
+    REG.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for f in sorted(REG.glob("*.json")):
+        try:
+            entries.append(json.loads(f.read_text()))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return entries
+
+
+def terminals(machine: str) -> dict[str, dict]:
+    raw = run_orca("terminal", "list", "--json", *env_args(machine))
+    try:
+        result = json.loads(raw)["result"]
+    except (ValueError, KeyError, TypeError):
+        return {}
+    rows = result.get("terminals", result) if isinstance(result, dict) else result
+    return {t["handle"]: t for t in rows if isinstance(t, dict) and "handle" in t}
+
+
+def state_of(term: dict | None) -> str:
+    if not term or not term.get("connected", True):
+        return "gone"
+    title = (term.get("title") or "").strip()
+    if title[:1] in BUSY:
+        return "busy"
+    if title[:1] == "✳":
+        return "idle"
+    return "shell" if not term.get("agentIdentity") else "idle"
+
+
+def my_terminal() -> str | None:
+    return os.environ.get("ORCA_TERMINAL_HANDLE")
+
+
+def my_label(entries: list[dict]) -> str | None:
+    me = my_terminal()
+    return next((e["label"] for e in entries if e.get("terminal") == me), None)
+
+
+def cmd_register(a: argparse.Namespace) -> None:
+    if not LABEL_RE.match(a.label) or not a.label.startswith(MACHINE + "/"):
+        sys.exit(f"cb: label must look like {MACHINE}/<scope> (lowercase, dashes)")
+    term = my_terminal()
+    if not term:
+        sys.exit("cb: run this inside an Orca terminal (ORCA_TERMINAL_HANDLE is unset)")
+    sync("pull")
+    for e in roster():
+        if e["label"] == a.label and e.get("terminal") != term:
+            sys.exit(f"cb: {a.label} is taken by terminal {e.get('terminal')}; cb unregister it first")
+        if e.get("terminal") == term and e["label"] != a.label:
+            (REG / f"{e['label'].replace('/', '__')}.json").unlink(missing_ok=True)
+    entry = {
+        "label": a.label, "machine": MACHINE, "terminal": term, "scope": a.scope,
+        "session": a.session or "", "registered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    (REG / f"{a.label.replace('/', '__')}.json").write_text(json.dumps(entry, indent=1) + "\n")
+    run_orca("terminal", "rename", "--terminal", term, "--title", a.label)
+    sync("push")
+    print(f"registered {a.label} -> {term}")
+
+
+def cmd_unregister(a: argparse.Namespace) -> None:
+    sync("pull")
+    entries = roster()
+    label = a.label or my_label(entries)
+    if not label:
+        sys.exit("cb: no label given and this terminal is not registered")
+    path = REG / f"{label.replace('/', '__')}.json"
+    if not path.exists():
+        sys.exit(f"cb: {label} is not registered")
+    path.unlink()
+    sync("push")
+    print(f"unregistered {label}")
+
+
+def live_roster() -> list[dict]:
+    entries = roster()
+    machines = [MACHINE, *REMOTES]
+    with ThreadPoolExecutor(len(machines)) as pool:
+        terms = dict(zip(machines, pool.map(terminals, machines)))
+    for e in entries:
+        e["state"] = state_of(terms.get(e["machine"], {}).get(e.get("terminal")))
+        e["title"] = (terms.get(e["machine"], {}).get(e.get("terminal")) or {}).get("title", "")
+    registered = {e.get("terminal") for e in entries}
+    unregistered = [
+        {"machine": m, "terminal": h, "title": t.get("title", ""), "state": state_of(t),
+         "agent": t.get("agentIdentity") or "shell"}
+        for m, ts in terms.items() for h, t in ts.items() if h not in registered
+    ]
+    return entries, unregistered
+
+
+def cmd_who(a: argparse.Namespace) -> None:
+    sync("pull")
+    entries, unregistered = live_roster()
+    if a.json:
+        print(json.dumps({"sessions": entries, "unregistered": unregistered}, indent=1))
+        return
+    for e in sorted(entries, key=lambda e: e["label"]):
+        print(f"{e['label']:<24} {e['state']:<5} {e.get('session',''):<15} {e['scope']}")
+    if unregistered:
+        print(f"\n{len(unregistered)} unregistered terminal(s):")
+        for u in unregistered:
+            print(f"  {u['machine']}  {u['state']:<5} {u['title'][:60]}")
+
+
+PROMPT_GLYPHS = ("\u276f", "\u203a")  # Claude Code and Codex input lines
+PLACEHOLDERS = ("Ask Codex to do anything", 'Try "')
+MENU_OPTION = re.compile(r"\d+\. ")
+MENU_OPEN = "<question menu open>"
+# Footers of Claude Code question menus and permission prompts (both answer on Enter).
+MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
+DRAFT_WAIT_SECONDS = 15 * 60
+DRAFT_POLL_SECONDS = 20
+DEFERRED_LOG = Path.home() / ".cache" / "cb-board" / "deferred.log"
+
+
+def input_draft(target: dict) -> str | None:
+    """Unsent text a person is typing in the target's input line, or None.
+
+    The input line is the last screen line that starts with a prompt glyph. A leftover
+    `[cb from ...]` message is not a person's draft. An unreadable screen counts as clear,
+    so a read failure never blocks delivery.
+    """
+    out = run_orca("terminal", "read", *env_args(target["machine"]), "--terminal", target["terminal"], "--json")
+    try:
+        tail = json.loads(out)["result"]["terminal"].get("tail") or []
+    except (ValueError, KeyError, TypeError):
+        return None
+    for index in range(len(tail) - 1, -1, -1):
+        stripped = tail[index].strip()
+        if stripped.startswith(PROMPT_GLYPHS):
+            draft = stripped[1:].strip()
+            below = " ".join(tail[index + 1:])
+            if MENU_OPTION.match(draft) and any(f in below for f in MENU_FOOTERS):
+                return MENU_OPEN  # a question menu is waiting; Enter would answer it
+            if not draft or draft.startswith("[cb from") or draft.startswith(PLACEHOLDERS):
+                return None
+            return draft  # includes a collapsed paste: its author is unknown, so wait
+    return None
+
+
+def deliver(target: dict, text: str) -> str:
+    out = run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"],
+                   "--enter", "--text", text)
+    return out.strip().splitlines()[0] if out.strip() else "cb: send gave no receipt; check `cb who`"
+
+
+def _log_deferred(note: str) -> None:
+    DEFERRED_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with DEFERRED_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {note}\n")
+
+
+def cmd_send(a: argparse.Namespace) -> None:
+    sync("pull")
+    entries, _ = live_roster()
+    target = next((e for e in entries if e["label"] == a.label), None)
+    if not target:
+        sys.exit(f"cb: no session is registered as {a.label}; run `cb who`. Not sent.")
+    if target["state"] == "gone":
+        sys.exit(f"cb: {a.label}'s terminal is gone; ask it to re-register. Not sent.")
+    sender = my_label(entries) or f"{MACHINE}/unregistered"
+    text = f"[cb from {sender} to {a.label}] " + " ".join(a.message)
+    if a.wait_clear:
+        _wait_then_deliver(target, text, a.label)
+        return
+    if input_draft(target) is None:
+        print(deliver(target, text))
+        return
+    # Someone is typing there: hand the message to a detached waiter and return at once.
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "send", "--wait-clear", a.label, *a.message],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True, env={**os.environ, "CB_SENDER_LABEL": sender})
+    print(f"cb: {a.label} has unsent text in its input line; the message waits and is typed once the line "
+          f"is clear (at most {DRAFT_WAIT_SECONDS // 60} min).")
+
+
+def _wait_then_deliver(target: dict, text: str, label: str) -> None:
+    sender = os.environ.get("CB_SENDER_LABEL")
+    if sender:
+        text = re.sub(r"^\[cb from [^ ]+ ", f"[cb from {sender} ", text, count=1)
+    _log_deferred(f"waiting  {label}")
+    deadline = time.time() + DRAFT_WAIT_SECONDS
+    while time.time() < deadline:
+        time.sleep(DRAFT_POLL_SECONDS)
+        if input_draft(target) is None:
+            _log_deferred(f"sent     {label} {deliver(target, text)}")
+            return
+    if input_draft(target) == MENU_OPEN:
+        # Never answer someone's question menu with an injected Enter.
+        _log_deferred(f"undelivered {label}: a question menu stayed open for 15 min; message: {text[:300]}")
+        return
+    delayed = text.replace("] ", "] [delayed: the input line stayed busy for 15 min] ", 1)
+    _log_deferred(f"timeout  {label} {deliver(target, delayed)}")
+
+
+# ---------------------------------------------------------------- board
+STATE: dict = {"generated_at": None, "sessions": [], "unregistered": [], "prs": [], "runs": {}, "edges": []}
+# Sealed run history per machine. The peer folder is a read-only mirror (rsync), never merged.
+RUN_DIRS = {m: Path(d).expanduser() for m, d in CFG.get("runs", {}).items()}
+_RUN_CACHE: dict[str, tuple[float, dict]] = {}
+EDGE_FILE = Path.home() / ".cache" / "cb-board" / "edges.json"
+INCOMING = re.compile(r"Message from @([a-z0-9-]+)")
+OUTGOING = re.compile(r"→ sent to ([a-z0-9-]+)")
+CROSS = re.compile(r"\[(?:cb from ([a-z0-9-]+/[a-z0-9-]+)|From ([a-z0-9-]+))")
+
+
+def run_summary(path: Path) -> dict:
+    mtime = path.stat().st_mtime
+    hit = _RUN_CACHE.get(str(path))
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        m = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    inv = m.get("invocation_id") or path.stem
+    grade = None
+    for g in sorted((path.parent / "grades" / inv).glob("circuit-rubric-*.json")):
+        try:
+            gd = json.loads(g.read_text())
+            grade = {"total": gd.get("total"), "failed": bool(gd.get("gate_failures")), "headline": gd.get("headline"),
+                     "kind": gd.get("kind")}
+        except (OSError, ValueError):
+            pass
+    failure = ""
+    for st in m.get("stages") or []:
+        if isinstance(st, dict) and st.get("failure"):
+            failure = f"{st.get('name')}: {(st['failure'].get('summary') or '')[:160]}"
+            break
+    out = {"invocation_id": inv, "status": m.get("status"), "book": m.get("requested_book"),
+           "started_at": m.get("started_at"), "duration_s": m.get("duration_seconds"),
+           "kind": (grade or {}).get("kind") or ("replay" if m.get("replay") else "live"),
+           "grade": grade, "failure": failure}
+    _RUN_CACHE[str(path)] = (mtime, out)
+    return out
+
+
+def poll_runs() -> dict:
+    runs = {}
+    for machine, d in RUN_DIRS.items():
+        if not d.is_dir():
+            runs[machine] = {"available": False, "items": []}
+            continue
+        files = sorted((p for p in d.glob("2*.json")), key=lambda p: p.stat().st_mtime, reverse=True)[:10]
+        runs[machine] = {"available": True, "items": [s for s in map(run_summary, files) if s]}
+    return runs
+
+
+def load_edges() -> dict:
+    try:
+        return json.loads(EDGE_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def update_edges(edges: dict, sessions: list[dict]) -> dict:
+    by_session = {s.get("session"): s["label"] for s in sessions if s.get("session")}
+    name = lambda n: by_session.get(n, n)  # noqa: E731
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for s in sessions:
+        me = s["label"]
+        for line in (s.get("screen") or "").splitlines():
+            pairs = []
+            if (m := INCOMING.search(line)):
+                pairs.append((name(m.group(1)), me))
+            if (m := OUTGOING.search(line)):
+                pairs.append((me, name(m.group(1))))
+            if (m := CROSS.search(line)):
+                pairs.append((m.group(1) or name(m.group(2)), me))
+            for src, dst in pairs:
+                if src == dst:
+                    continue
+                key = f"{src}|{dst}"
+                e = edges.setdefault(key, {"src": src, "dst": dst, "seen": [], "first": now})
+                sig = line.strip()[:90]
+                if sig not in e["seen"]:
+                    e["seen"] = (e["seen"] + [sig])[-20:]
+                    e["last"] = now
+                    e["snippet"] = sig
+    EDGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    EDGE_FILE.write_text(json.dumps(edges))
+    return edges
+
+
+def recap_of(screen: str) -> str:
+    lines = screen.splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        if "recap:" in lines[i]:
+            text = [lines[i].split("recap:", 1)[1].strip()]
+            for nxt in lines[i + 1:i + 4]:
+                if nxt.startswith("  ") and nxt.strip() and not nxt.strip()[0] in "⏺❯›─✻※":
+                    text.append(nxt.strip())
+                else:
+                    break
+            return " ".join(text)
+    return ""
+
+
+def clean_screen(raw: str) -> str:
+    keep = [ln for ln in raw.splitlines()
+            if not re.match(r"^(source|cursor|oldest cursor|latest cursor):", ln) and "─────" not in ln]
+    return "\n".join(keep).strip()
+
+
+def poll_session(e: dict) -> dict:
+    if e["state"] == "gone":
+        return {**e, "recap": "", "needs_you": False, "screen": ""}
+    raw = run_orca("terminal", "read", *env_args(e["machine"]), "--terminal", e["terminal"], "--limit", "60")
+    screen = clean_screen(raw)
+    tail = "\n".join(screen.splitlines()[-14:])
+    return {**e, "recap": recap_of(screen), "needs_you": bool(NEEDS_YOU.search(tail)), "screen": screen}
+
+
+def poll_prs() -> list[dict]:
+    if not CFG.get("prs_repo"):
+        return []
+    try:
+        out = subprocess.run(
+            ["gh", "pr", "list", "--repo", CFG["prs_repo"], "--state", "open", "--limit", "30",
+             "--json", "number,title,headRefName,isDraft,mergeable,statusCheckRollup,updatedAt"],
+            capture_output=True, text=True, timeout=60).stdout
+        prs = json.loads(out)
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        return STATE["prs"]
+    for p in prs:
+        checks = p.pop("statusCheckRollup", None) or []
+        states = {(c.get("conclusion") or c.get("status") or "").lower() for c in checks}
+        p["ci"] = ("none" if not checks else "fail" if states & {"failure", "cancelled", "timed_out"}
+                   else "pending" if states & {"in_progress", "queued", "pending", ""} else "pass")
+    return prs
+
+
+def poll_loop(interval: int) -> None:
+    last_pr = 0.0
+    edges = load_edges()
+    while True:
+        try:
+            sync("pull")
+            entries, unregistered = live_roster()
+            with ThreadPoolExecutor(6) as pool:
+                sessions = list(pool.map(poll_session, entries))
+            if time.time() - last_pr > 120:
+                STATE["prs"] = poll_prs()
+                last_pr = time.time()
+            edges = update_edges(edges, sessions)
+            STATE.update(sessions=sessions, unregistered=unregistered, runs=poll_runs(),
+                         edges=sorted(({k: v for k, v in e.items() if k != "seen"} | {"count": len(e["seen"])}
+                                       for e in edges.values()), key=lambda e: e.get("last", ""), reverse=True),
+                         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+            STATE.pop("error", None)
+        except Exception as err:  # the board must keep serving its last good state
+            STATE["error"] = repr(err)
+        time.sleep(interval)
+
+
+PAGE = Path(__file__).resolve().parent.parent / "board" / "cb-board.html"
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path.startswith("/state.json"):
+            body, ctype = json.dumps(STATE).encode(), "application/json"
+        elif self.path in ("/", "/index.html"):
+            body, ctype = PAGE.read_bytes(), "text/html; charset=utf-8"
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+def cmd_board(a: argparse.Namespace) -> None:
+    threading.Thread(target=poll_loop, args=(a.interval,), daemon=True).start()
+    print(f"cb board on http://localhost:{a.port}/ (polling every {a.interval}s)")
+    ThreadingHTTPServer(("0.0.0.0", a.port), Handler).serve_forever()
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="cb", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("register"); r.add_argument("label"); r.add_argument("--scope", required=True)
+    r.add_argument("--session"); r.set_defaults(fn=cmd_register)
+    u = sub.add_parser("unregister"); u.add_argument("label", nargs="?"); u.set_defaults(fn=cmd_unregister)
+    w = sub.add_parser("who"); w.add_argument("--json", action="store_true"); w.set_defaults(fn=cmd_who)
+    s = sub.add_parser("send"); s.add_argument("label"); s.add_argument("message", nargs="+")
+    s.add_argument("--wait-clear", action="store_true", help=argparse.SUPPRESS)
+    s.set_defaults(fn=cmd_send)
+    b = sub.add_parser("board"); b.add_argument("--port", type=int, default=8765)
+    b.add_argument("--interval", type=int, default=30); b.set_defaults(fn=cmd_board)
+    a = p.parse_args()
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

@@ -16,10 +16,10 @@ Project session logs:
 ~/.claude/projects/<sanitized-project-path>/<session-id>.jsonl
 ```
 
-The sanitized path usually replaces `/` with `-`, so `/home/wdong/devel/admin` becomes:
+The sanitized path usually replaces `/` with `-`, so `/home/you/devel/admin` becomes:
 
 ```text
-~/.claude/projects/-home-wdong-devel-admin/
+~/.claude/projects/-home-you-devel-admin/
 ```
 
 Useful CLI shapes:

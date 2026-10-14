@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # maestro board — scaffold & drive a project's live build board (Kanban + roadmap).
-#   board init [dir]    scaffold orchestration/ into a project (default: cwd)
+#   board init [dir]    scaffold orchestration/ (board, dashboard, ROLES.md) into a project (default: cwd)
 #   board serve [port]  serve this project's board (default :8765)
 #   board <cmd> ...      claim|progress|block|review|done|gate|signoff|ledger|add|drop|show
 #                        (forwarded to this project's orchestration/status.py)
@@ -34,7 +34,7 @@ case "$cmd" in
     shift
     dest="${1:-$PWD}/orchestration"
     mkdir -p "$dest"
-    cp "$TPL/status.py" "$TPL/dashboard.html" "$TPL/serve.sh" "$TPL/README.md" "$dest/"
+    cp "$TPL/status.py" "$TPL/dashboard.html" "$TPL/serve.sh" "$TPL/README.md" "$TPL/ROLES.md" "$dest/"
     chmod +x "$dest/status.py" "$dest/serve.sh"
     if [ -f "$dest/board-state.json" ]; then
       echo "[board] kept existing $dest/board-state.json"

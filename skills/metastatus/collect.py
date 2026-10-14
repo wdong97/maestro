@@ -22,12 +22,9 @@ from pathlib import Path
 
 
 def load_cb():
-    path = shutil.which("cb")
-    if not path:
-        fallback = Path.home() / "devel" / "agent-memory" / "bin" / "cb"
-        path = str(fallback) if fallback.exists() else None
-    if not path:
-        sys.exit("metastatus: `cb` is not on PATH (it ships in the agent-memory repo)")
+    path = shutil.which("cb") or str(Path(__file__).resolve().parent.parent.parent / "bin" / "cb")
+    if not Path(path).exists():
+        sys.exit("metastatus: `cb` is not on PATH (it ships in maestro: run ./install.sh)")
     path = os.path.realpath(path)
     loader = importlib.machinery.SourceFileLoader("cb_cli", path)
     spec = importlib.util.spec_from_loader("cb_cli", loader)

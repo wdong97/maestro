@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Board</title>
+<style>
+:root {
+  --bg: #f6f6f3; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc;
+  --busy: #2563eb; --idle: #8b8b85; --gone: #b91c1c; --you: #b45309; --you-bg: #fff4e0;
+  --pass: #15803d; --fail: #b91c1c; --pend: #a16207; --accent: #1d1d1b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141413; --panel: #1e1e1c; --ink: #ecebe6; --muted: #9a9a93; --line: #2f2f2c;
+    --busy: #60a5fa; --idle: #8b8b85; --gone: #f87171; --you: #fbbf24; --you-bg: #33270f;
+    --pass: #4ade80; --fail: #f87171; --pend: #facc15; --accent: #ecebe6;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 48px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; margin-bottom: 14px; }
+h1 { font-size: 19px; margin: 0; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 24px 0 10px; font-weight: 600; }
+.stamp { margin-left: auto; color: var(--muted); font-size: 12px; }
+nav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 6px; overflow-x: auto; }
+nav button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 14px; font: inherit;
+  color: var(--muted); cursor: pointer; white-space: nowrap; }
+nav button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+nav .count { font-size: 11px; color: var(--you); margin-left: 4px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.tile h3 { margin: 0 0 6px; font-size: 13px; font-family: var(--mono); }
+.big { font-size: 22px; font-weight: 600; }
+.sub { color: var(--muted); font-size: 13px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; }
+.card.you { border-color: var(--you); background: var(--you-bg); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.label { font-family: var(--mono); font-weight: 600; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; }
+.s-busy { background: var(--busy); } .s-idle { background: var(--idle); } .s-gone { background: var(--gone); } .s-shell { background: var(--line); }
+.pill { font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.pill.you { border-color: var(--you); color: var(--you); font-weight: 600; }
+.scope { color: var(--muted); margin-top: 2px; font-size: 13px; }
+.recap { margin-top: 6px; }
+.recap:empty { display: none; }
+pre { display: none; margin: 10px 0 0; padding: 10px; background: var(--bg); border-radius: 6px; max-height: 420px;
+  overflow: auto; font: 12px/1.4 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.card.open pre { display: block; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+td, th { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font-size: 12px; color: var(--muted); font-weight: 500; }
+.ok, .ci-pass { color: var(--pass); } .bad, .ci-fail { color: var(--fail); } .ci-pending { color: var(--pend); } .ci-none, .muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.edge .arrow { color: var(--muted); padding: 0 4px; }
+.fresh td:first-child { box-shadow: inset 3px 0 0 var(--busy); }
+.empty { color: var(--muted); padding: 10px 0; }
+[hidden] { display: none !important; }
+@media (max-width: 640px) { .stamp { margin-left: 0; width: 100%; } .hide-sm { display: none; } .cards { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Agent Board</h1>
+    <span class="stamp" id="stamp">loading…</span>
+  </header>
+  <nav id="tabs"></nav>
+  <div id="view"></div>
+</main>
+<script>
+const MACHINES = { wsl01: "WSL box", mac01: "Mac" };
+let tab = "overview"; try { tab = localStorage.getItem("cb-tab") || tab; } catch {}
+const open = new Set();
+let ST = null;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const ago = iso => { if (!iso) return "—"; const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (s < 90) return `${Math.round(s)}s ago`; if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 172800) return `${Math.round(s / 3600)}h ago`; return `${Math.round(s / 86400)}d ago`; };
+const mins = s => s == null ? "—" : s < 120 ? `${Math.round(s)}s` : `${Math.round(s / 60)}m`;
+
+function card(s) {
+  const you = s.needs_you ? '<span class="pill you">needs you</span>' : "";
+  return `<div class="card ${s.needs_you ? "you" : ""} ${open.has(s.label) ? "open" : ""}" data-label="${esc(s.label)}">
+    <div class="row"><span class="dot s-${s.state}"></span><span class="label">${esc(s.label)}</span>
+      <span class="pill">${esc(s.state)}</span>${you}
+      <span class="muted" style="margin-left:auto;font-size:12px">${esc(s.session || "")}</span></div>
+    <div class="scope">${esc(s.scope)}</div>
+    <div class="recap">${esc(s.recap)}</div>
+    <pre>${esc(s.screen || "(no screen captured)")}</pre></div>`;
+}
+
+function runCell(r) {
+  if (!r) return '<span class="muted">no runs</span>';
+  const st = r.status === "ok" || r.status === "complete" ? "ok" : r.status === "failed" ? "bad" : "muted";
+  const g = r.grade ? ` · ${r.grade.failed ? "FAILED" : "graded"} ${r.grade.total ?? ""}/100` : "";
+  return `<span class="${st}">${esc(r.status)}</span> · ${esc(r.kind)} · ${esc(r.book)}${g} · ${ago(r.started_at)}`;
+}
+
+function overview() {
+  const ss = ST.sessions || [], prs = ST.prs || [], edges = ST.edges || [];
+  const you = ss.filter(s => s.needs_you);
+  const tiles = Object.keys(MACHINES).map(m => {
+    const mine = ss.filter(s => s.machine === m), n = k => mine.filter(s => s.state === k).length;
+    const runs = (ST.runs || {})[m] || {};
+    const last = (runs.items || [])[0];
+    return `<div class="tile"><h3>${m} · ${MACHINES[m]}</h3>
+      <div class="big">${n("busy")} <span class="sub">busy</span> &nbsp;${n("idle")} <span class="sub">idle</span>
+        ${mine.filter(s => s.needs_you).length ? ` &nbsp;<span style="color:var(--you)">${mine.filter(s => s.needs_you).length} need you</span>` : ""}</div>
+      <div class="sub">Last run: ${runs.available === false ? "mirror not set up yet" : runCell(last)}</div></div>`;
+  }).join("");
+  const green = prs.filter(p => p.ci === "pass").length, red = prs.filter(p => p.ci === "fail").length;
+  const recent = edges.filter(e => e.last && Date.now() - Date.parse(e.last) < 3600e3);
+  const prTile = `<div class="tile"><h3>pull requests</h3><div class="big">${prs.length} <span class="sub">open</span></div>
+    <div class="sub"><span class="ok">${green} green</span> · <span class="bad">${red} red</span> · ${prs.length - green - red} pending or no CI</div></div>`;
+  const talkTile = `<div class="tile"><h3>conversations</h3><div class="big">${recent.length} <span class="sub">active links, last hour</span></div>
+    <div class="sub">${edges.length} links seen since the board started</div></div>`;
+
+  return `<h2>Right now</h2><div class="tiles">${tiles}${prTile}${talkTile}</div>
+    ${you.length ? `<h2>Needs you</h2><div class="cards">${you.map(card).join("")}</div>` : ""}
+    <h2>Who is talking to whom</h2>${edgeTable(edges.slice(0, 25))}
+    <h2>Open pull requests</h2>${prTable(prs)}`;
+}
+
+function edgeTable(edges) {
+  if (!edges.length) return '<div class="empty">No messages seen yet. Links appear as sessions message each other.</div>';
+  return `<table><thead><tr><th>From → to</th><th>Messages</th><th class="hide-sm">Latest</th><th>When</th></tr></thead><tbody>${
+    edges.map(e => `<tr class="edge ${e.last && Date.now() - Date.parse(e.last) < 900e3 ? "fresh" : ""}">
+      <td class="mono">${esc(e.src)}<span class="arrow">→</span>${esc(e.dst)}</td><td>${e.count}</td>
+      <td class="hide-sm muted">${esc(e.snippet)}</td><td class="muted">${ago(e.last)}</td></tr>`).join("")}</tbody></table>`;
+}
+
+function prTable(prs) {
+  if (!prs.length) return '<div class="empty">No open pull requests.</div>';
+  return `<table><thead><tr><th>PR</th><th>Title</th><th class="hide-sm">Branch</th><th>CI</th><th class="hide-sm">Merge</th></tr></thead><tbody>${
+    prs.map(p => `<tr><td>#${p.number}</td><td>${esc(p.title)}${p.isDraft ? ' <span class="pill">draft</span>' : ""}</td>
+      <td class="hide-sm muted mono">${esc(p.headRefName)}</td><td class="ci-${p.ci}">${esc(p.ci)}</td>
+      <td class="hide-sm muted">${esc((p.mergeable || "").toLowerCase())}</td></tr>`).join("")}</tbody></table>`;
+}
+
+function machine(m) {
+  const mine = (ST.sessions || []).filter(s => s.machine === m).sort((a, b) => a.label.localeCompare(b.label));
+  const runs = (ST.runs || {})[m] || {};
+  const un = (ST.unregistered || []).filter(u => u.machine === m);
+  const edges = (ST.edges || []).filter(e => e.src.startsWith(m) || e.dst.startsWith(m));
+  const runRows = runs.available === false
+    ? `<div class="empty">This machine's run history isn't mirrored here yet.</div>`
+    : (runs.items || []).length ? `<table><thead><tr><th>Run</th><th>Status</th><th class="hide-sm">Book</th><th>Grade</th><th class="hide-sm">Took</th><th>Started</th></tr></thead><tbody>${
+      runs.items.map(r => `<tr><td class="mono">${esc(r.invocation_id)}</td>
+        <td class="${r.status === "failed" ? "bad" : "ok"}">${esc(r.status)} <span class="muted">${esc(r.kind)}</span>
+          ${r.failure ? `<div class="sub">${esc(r.failure)}</div>` : ""}</td>
+        <td class="hide-sm">${esc(r.book)}</td>
+        <td>${r.grade ? `${r.grade.failed ? '<span class="bad">FAILED</span>' : ""} ${r.grade.total ?? ""}/100` : '<span class="muted">—</span>'}</td>
+        <td class="hide-sm">${mins(r.duration_s)}</td><td class="muted">${ago(r.started_at)}</td></tr>`).join("")}</tbody></table>`
+    : '<div class="empty">No sealed runs found.</div>';
+  return `<h2>Sessions</h2>${mine.length ? `<div class="cards">${mine.map(card).join("")}</div>` : '<div class="empty">No registered sessions.</div>'}
+    <h2>Recent runs</h2>${runRows}
+    <h2>Conversations</h2>${edgeTable(edges)}
+    <h2>Unregistered terminals</h2><div class="sub">${un.length ? un.map(u => `${esc(u.state)} · ${esc(u.title)}`).join("<br>") : "none"}</div>`;
+}
+
+function render() {
+  if (!ST) return;
+  const you = m => (ST.sessions || []).filter(s => s.needs_you && (!m || s.machine === m)).length;
+  const tabs = [["overview", "Overview", you()], ...Object.entries(MACHINES).map(([k, v]) => [k, `${v} (${k})`, you(k)])];
+  document.getElementById("tabs").innerHTML = tabs.map(([k, v, n]) =>
+    `<button data-tab="${k}" class="${k === tab ? "on" : ""}">${esc(v)}${n ? `<span class="count">● ${n}</span>` : ""}</button>`).join("");
+  document.getElementById("view").innerHTML = tab === "overview" ? overview() : machine(tab);
+  document.getElementById("stamp").textContent = ST.generated_at
+    ? `updated ${ago(ST.generated_at)}${ST.error ? " · last poll failed" : ""}` : "first poll running…";
+}
+
+async function refresh() {
+  try { ST = await (await fetch("state.json", {cache: "no-store"})).json(); render(); }
+  catch { document.getElementById("stamp").textContent = "board server unreachable"; }
+}
+
+document.addEventListener("click", e => {
+  const t = e.target.closest("button[data-tab]");
+  if (t) { tab = t.dataset.tab; try { localStorage.setItem("cb-tab", tab); } catch {} render(); return; }
+  const c = e.target.closest(".card"); if (!c || e.target.closest("pre")) return;
+  const l = c.dataset.label; open.has(l) ? open.delete(l) : open.add(l);
+  document.querySelectorAll(`.card[data-label="${CSS.escape(l)}"]`).forEach(x => x.classList.toggle("open"));
+});
+refresh(); setInterval(refresh, 10000);
+</script>
+</body>
+</html>

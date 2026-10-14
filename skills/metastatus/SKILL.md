@@ -16,7 +16,7 @@ python3 ~/.claude/skills/metastatus/collect.py --out <scratch>/threads.json
 
 Use your scratchpad (or a temp dir) for `<scratch>`; the file holds raw screens and can
 show private data, so never put it in a repo or an artifact. The script needs `cb` on
-PATH (agent-memory repo) and works the same from either machine. Read the whole file.
+PATH (maestro `bin/cb`) and works the same from either machine. Read the whole file.
 
 It gives `sessions` (registered, not gone, each with `scope`, `state`, `screen`,
 `self_recap`, `needs_you`, `read_ok`), `gone` (labels only), and `unregistered`
@@ -83,4 +83,4 @@ No recommendations beyond the disposition column, and no next-work plan. Stop af
 ## Setup on a new machine
 
 `cd ~/maestro && git pull && ./install.sh` links this skill into Claude and Codex. `cb`
-comes from the agent-memory repo (`~/.local/bin/cb`).
+ships in maestro (`bin/cb`); set `~/.config/maestro/cb.json` for its machines and registry.

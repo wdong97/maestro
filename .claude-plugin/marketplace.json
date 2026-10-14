@@ -1,0 +1,8 @@
+{
+  "name": "maestro",
+  "owner": { "name": "wdong97", "url": "https://github.com/wdong97" },
+  "description": "maestro: the operating layer for a shop of coding-agent sessions.",
+  "plugins": [
+    { "name": "maestro", "source": "./", "description": "Registry, messaging, roles, board, and Claude+Codex ensemble skills.", "category": "productivity" }
+  ]
+}

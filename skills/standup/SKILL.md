@@ -30,7 +30,7 @@ tree — then a **collision surface**:
 - **SOFT** — same repo, different worktrees: independent files, but they share refs,
   branches, pushes, migrations, and remote state.
 
-Then `ListAgents` for the addressable names (`cb-finance-4c`, …) and each one's
+Then `ListAgents` for the addressable names (`myproj-4c`, …) and each one's
 busy/idle state. The two views don't share ids — **join them on the working-tree path
 you get back in the replies**, not on order or name.
 
