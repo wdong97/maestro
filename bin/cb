@@ -300,9 +300,11 @@ def input_state(target: dict, own: str | None = None) -> str | None:
     if MENU_OPTION.match(line) and any(f in " ".join(tail[index + 1:]) for f in MENU_FOOTERS):
         return "a question menu is open"
     line = "" if line.startswith(PLACEHOLDERS) else line
-    for box in (draft, line):
-        if box:
-            return STUCK if own and box.startswith(f"[cb#{own}") else "someone is typing"
+    boxes = [box for box in (draft, line) if box]
+    if any(not (own and box.startswith(f"[cb#{own}")) for box in boxes):
+        return "someone is typing"  # checked on both surfaces before anything counts as ours
+    if boxes:
+        return STUCK
     if tail[index].strip().startswith(CODEX_GLYPH) and any("esc to interrupt" in t for t in tail[max(0, index - 4):index]):
         return "codex is mid-turn"  # Claude takes a message mid-turn; Codex waits for its turn to end
     return None
@@ -315,7 +317,9 @@ def _on_line(target: dict, ident: str) -> bool | None:
     if tail is None:
         return None
     found = _input_line(tail)
-    boxes = (draft, found[1] if found else "")
+    if found is None:
+        return None  # mid-redraw or a long wrapped input: the box cannot be located
+    boxes = (draft, found[1])
     if any(box.startswith(f"[cb#{ident}") for box in boxes):
         return True
     if any(COLLAPSED.match(box) for box in boxes):
@@ -329,14 +333,16 @@ def _press_enter(target: dict) -> None:
 
 def deliver(target: dict, text: str, ident: str) -> str:
     """Type and submit in one Orca call; "delivered" only once the box is seen without it,
-    "typed" when it may still be in the box, "not accepted" when nothing was typed."""
+    "typed" when it may still be in the box or the receipt was lost, "not accepted" only when
+    Orca explicitly refused and the box is seen without it."""
     out = run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"],
                    "--text", text, "--enter", "--json")
     try:
-        accepted = bool(json.loads(out)["result"]["send"]["accepted"])
-    except (ValueError, KeyError, TypeError):
-        accepted = False
-    if not accepted and _on_line(target, ident) is False:
+        reply = json.loads(out)
+        rejected = reply.get("ok") is False or not reply["result"]["send"]["accepted"]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        rejected = False  # no readable receipt: it may have gone through, so never send it again
+    if rejected and _on_line(target, ident) is False:
         return "not accepted"
     for _ in range(SUBMIT_TRIES):
         time.sleep(SUBMIT_CHECK_SECONDS)
@@ -449,8 +455,10 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                         _log_delivery(f"sent     {label} ({len(typed)} message(s)): submitted after a wait")
                         results.append(f"{len(typed)} message(s) to {label}: delivered")
                         continue
-                    reason = STUCK if seen else "cannot tell yet whether our message was submitted"
-                    if seen and presses < SUBMIT_TRIES and input_state(typed[0]["target"], own=lead) == STUCK:
+                    reason = "cannot tell yet whether our message was submitted"
+                    if seen:
+                        reason = input_state(typed[0]["target"], own=lead) or STUCK
+                    if reason == STUCK and presses < SUBMIT_TRIES:
                         _press_enter(typed[0]["target"])
                         presses += 1
                         time.sleep(SUBMIT_CHECK_SECONDS)
