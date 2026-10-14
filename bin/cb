@@ -283,7 +283,7 @@ def deliver(target: dict, text: str, *, verified_empty: bool = False) -> str:
     # The line was empty on two reads just before typing, so a collapsed paste now is ours.
     pressed = _submit_if_ours(target, text, just_typed=verified_empty)
     time.sleep(SUBMIT_CHECK_SECONDS)
-    if _submit_if_ours(target, text, just_typed=verified_empty):  # first key was swallowed
+    if _submit_if_ours(target, text):  # our id still visible: the first key was swallowed
         pressed = True
         time.sleep(SUBMIT_CHECK_SECONDS)
         if _still_ours(target, text):
