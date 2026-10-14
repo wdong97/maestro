@@ -231,6 +231,9 @@ MENU_OPEN = "<question menu open>"
 UNREADABLE = "<screen unreadable>"
 # Footers of Claude Code question menus and permission prompts (both answer on Enter).
 MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
+SUBMIT_CHECK_SECONDS = 2.0
+CLEAR_RECHECK_SECONDS = 1.5
+SUBMIT_LEFTOVER = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
 DRAFT_WAIT_SECONDS = 15 * 60
 DRAFT_POLL_SECONDS = 20
 DEFERRED_LOG = Path.home() / ".cache" / "cb-board" / "deferred.log"
@@ -266,7 +269,48 @@ def input_draft(target: dict) -> str | None:
 def deliver(target: dict, text: str) -> str:
     out = run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"],
                    "--enter", "--text", text)
-    return out.strip().splitlines()[0] if out.strip() else "cb: send gave no receipt; check `cb who`"
+    receipt = out.strip().splitlines()[0] if out.strip() else "cb: send gave no receipt; check `cb who`"
+    _confirm_submitted(target)
+    return receipt
+
+
+def _screen_tail(target: dict) -> list[str]:
+    out = run_orca("terminal", "read", *env_args(target["machine"]), "--terminal", target["terminal"], "--json")
+    try:
+        return json.loads(out)["result"]["terminal"].get("tail") or []
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return []
+
+
+def _confirm_submitted(target: dict) -> None:
+    """A long message can sit unsubmitted as a collapsed paste (Codex) or a leftover line.
+
+    After typing, re-read the input line once. If our own text or a collapsed paste is still
+    there, press Enter when the session is idle, or Tab (queue) when Codex is busy.
+    """
+    time.sleep(SUBMIT_CHECK_SECONDS)
+    tail = _screen_tail(target)
+    raw = None
+    for line in reversed(tail):
+        stripped = line.strip()
+        if stripped.startswith(PROMPT_GLYPHS):
+            raw = stripped[1:].strip()
+            break
+    if not raw or not (raw.startswith("[cb from") or SUBMIT_LEFTOVER.match(raw)):
+        return
+    busy = any("tab to queue message" in line for line in tail[-6:])
+    key = "\t" if busy else ""
+    args = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
+    run_orca(*args, *(["--text", key] if busy else ["--enter"]))
+
+
+def input_clear_twice(target: dict) -> bool:
+    """The input line is empty on two reads a short gap apart (narrows the typing race)."""
+
+    if input_draft(target) is not None:
+        return False
+    time.sleep(CLEAR_RECHECK_SECONDS)
+    return input_draft(target) is None
 
 
 def _log_deferred(note: str) -> None:
@@ -288,7 +332,7 @@ def cmd_send(a: argparse.Namespace) -> None:
     if a.wait_clear:
         _wait_then_deliver(target, text, a.label)
         return
-    if input_draft(target) is None:
+    if input_clear_twice(target):
         print(deliver(target, text))
         return
     # Someone is typing there: hand the message to a detached waiter and return at once.
@@ -307,7 +351,7 @@ def _wait_then_deliver(target: dict, text: str, label: str) -> None:
     deadline = time.time() + DRAFT_WAIT_SECONDS
     while time.time() < deadline:
         time.sleep(DRAFT_POLL_SECONDS)
-        if input_draft(target) is None:
+        if input_clear_twice(target):
             _log_deferred(f"sent     {label} {deliver(target, text)}")
             return
     state = input_draft(target)
