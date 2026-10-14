@@ -112,7 +112,11 @@ def sync(direction: str) -> None:
             print("cb: registry saved locally; not pushed, because this checkout has unpushed commits outside "
                   "the registry (or no upstream). Push them through the normal review first.", file=sys.stderr)
             return
-        run("push", "-q", "--no-verify")
+        # Push exactly the branch checked above; a bare push could follow push.default=matching.
+        upstream = run("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").stdout.strip()
+        remote, _, branch = upstream.partition("/")
+        if remote and branch:
+            run("push", "-q", "--no-verify", remote, f"HEAD:refs/heads/{branch}")
     else:
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.touch()
@@ -271,7 +275,7 @@ def input_draft(target: dict) -> str | None:
             if not draft or CB_HEADER.match(draft) is not None or draft.startswith(PLACEHOLDERS):
                 return None
             return draft  # includes a collapsed paste: its author is unknown, so wait
-    return None
+    return UNREADABLE  # no agent input line (e.g. the agent exited to a shell): typing could run commands
 
 
 def deliver(target: dict, text: str, *, verified_empty: bool = False) -> str:
