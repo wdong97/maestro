@@ -98,7 +98,7 @@ function card(s) {
 function runCell(r) {
   if (!r) return '<span class="muted">no runs</span>';
   const st = r.status === "ok" || r.status === "complete" ? "ok" : r.status === "failed" ? "bad" : "muted";
-  const g = r.grade ? ` · ${r.grade.failed ? "FAILED" : "graded"} ${r.grade.total ?? ""}/100` : "";
+  const g = r.grade ? ` · ${r.grade.failed ? "FAILED" : "graded"} ${esc(r.grade.total ?? "")}/100` : "";
   return `<span class="${st}">${esc(r.status)}</span> · ${esc(r.kind)} · ${esc(r.book)}${g} · ${ago(r.started_at)}`;
 }
 
@@ -155,7 +155,7 @@ function machine(m) {
         <td class="${r.status === "failed" ? "bad" : "ok"}">${esc(r.status)} <span class="muted">${esc(r.kind)}</span>
           ${r.failure ? `<div class="sub">${esc(r.failure)}</div>` : ""}</td>
         <td class="hide-sm">${esc(r.book)}</td>
-        <td>${r.grade ? `${r.grade.failed ? '<span class="bad">FAILED</span>' : ""} ${r.grade.total ?? ""}/100` : '<span class="muted">—</span>'}</td>
+        <td>${r.grade ? `${r.grade.failed ? '<span class="bad">FAILED</span>' : ""} ${esc(r.grade.total ?? "")}/100` : '<span class="muted">—</span>'}</td>
         <td class="hide-sm">${mins(r.duration_s)}</td><td class="muted">${ago(r.started_at)}</td></tr>`).join("")}</tbody></table>`
     : '<div class="empty">No sealed runs found.</div>';
   return `<h2>Sessions</h2>${mine.length ? `<div class="cards">${mine.map(card).join("")}</div>` : '<div class="empty">No registered sessions.</div>'}
