@@ -271,7 +271,7 @@ def input_draft(target: dict) -> str | None:
     return None
 
 
-def deliver(target: dict, text: str) -> str:
+def deliver(target: dict, text: str, *, verified_empty: bool = False) -> str:
     """Type the message; press Enter only when this exact message is on the input line."""
 
     base = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
@@ -281,13 +281,15 @@ def deliver(target: dict, text: str) -> str:
         return receipt + " (typing not confirmed; no Enter pressed)"
     time.sleep(ENTER_DELAY_SECONDS)
     # The line was empty on two reads just before typing, so a collapsed paste now is ours.
-    pressed = _submit_if_ours(target, text, just_typed=True)
+    pressed = _submit_if_ours(target, text, just_typed=verified_empty)
     time.sleep(SUBMIT_CHECK_SECONDS)
     if _submit_if_ours(target, text):  # our id still visible: the first Enter was swallowed
         pressed = True
         time.sleep(SUBMIT_CHECK_SECONDS)
         if _still_ours(target, text):
             return receipt + " (NOT SUBMITTED: the message is still on the input line)"
+    elif pressed and _collapsed_now(target):
+        return receipt + " (NOT CONFIRMED: a collapsed paste is still on the input line)"
     if not pressed:
         return receipt + " (NOT SUBMITTED: the input line did not show this message)"
     return receipt
@@ -329,6 +331,14 @@ def _submit_if_ours(target: dict, text: str, *, just_typed: bool = False) -> boo
     return True
 
 
+def _collapsed_now(target: dict) -> bool:
+    for line in reversed(_screen_tail(target)):
+        stripped = line.strip()
+        if stripped.startswith(PROMPT_GLYPHS):
+            return COLLAPSED.match(stripped[1:].strip()) is not None
+    return False
+
+
 def _still_ours(target: dict, text: str) -> bool:
     ident = MESSAGE_ID.match(text)
     for line in reversed(_screen_tail(target)):
@@ -367,7 +377,7 @@ def cmd_send(a: argparse.Namespace) -> None:
         _wait_then_deliver(target, text, a.label)
         return
     if input_clear_twice(target):
-        print(deliver(target, text))
+        print(deliver(target, text, verified_empty=True))
         return
     # Someone is typing there: hand the message to a detached waiter and return at once.
     subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "send", "--wait-clear", a.label, *a.message],
@@ -386,7 +396,7 @@ def _wait_then_deliver(target: dict, text: str, label: str) -> None:
     while time.time() < deadline:
         time.sleep(DRAFT_POLL_SECONDS)
         if input_clear_twice(target):
-            _log_deferred(f"sent     {label} {deliver(target, text)}")
+            _log_deferred(f"sent     {label} {deliver(target, text, verified_empty=True)}")
             return
     state = input_draft(target)
     if state is None:
