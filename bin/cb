@@ -235,6 +235,7 @@ MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
 SUBMIT_CHECK_SECONDS = 2.0
 CLEAR_RECHECK_SECONDS = 1.5
 ENTER_DELAY_SECONDS = 0.6
+COLLAPSED = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
 TYPED_OK = re.compile(r"\bSent \d+ bytes\b")
 MESSAGE_ID = re.compile(r"\[cb#[0-9a-f]{6}")
 CB_HEADER = re.compile(r"\[cb(#[0-9a-f]{6})? from ")
@@ -279,9 +280,16 @@ def deliver(target: dict, text: str) -> str:
     if "input_accepted" not in out and TYPED_OK.search(out) is None:
         return receipt + " (typing not confirmed; no Enter pressed)"
     time.sleep(ENTER_DELAY_SECONDS)
-    _submit_if_ours(target, text)
+    # The line was empty on two reads just before typing, so a collapsed paste now is ours.
+    pressed = _submit_if_ours(target, text, just_typed=True)
     time.sleep(SUBMIT_CHECK_SECONDS)
-    _submit_if_ours(target, text)  # one retry if a long paste swallowed the first Enter
+    if _submit_if_ours(target, text):  # our id still visible: the first Enter was swallowed
+        pressed = True
+        time.sleep(SUBMIT_CHECK_SECONDS)
+        if _still_ours(target, text):
+            return receipt + " (NOT SUBMITTED: the message is still on the input line)"
+    if not pressed:
+        return receipt + " (NOT SUBMITTED: the input line did not show this message)"
     return receipt
 
 
@@ -293,7 +301,7 @@ def _screen_tail(target: dict) -> list[str]:
         return []
 
 
-def _submit_if_ours(target: dict, text: str) -> None:
+def _submit_if_ours(target: dict, text: str, *, just_typed: bool = False) -> bool:
     """Press Enter (Tab when Codex is busy) only if the input line starts with this message's id.
 
     The id is the first 11 characters, `[cb#xxxxxx`, so it never wraps and names one message.
@@ -302,7 +310,7 @@ def _submit_if_ours(target: dict, text: str) -> None:
 
     ident = MESSAGE_ID.match(text)
     if ident is None:
-        return
+        return False
     tail = _screen_tail(target)
     raw = None
     for line in reversed(tail):
@@ -310,11 +318,24 @@ def _submit_if_ours(target: dict, text: str) -> None:
         if stripped.startswith(PROMPT_GLYPHS):
             raw = stripped[1:].strip()
             break
-    if not raw or not raw.startswith(ident.group(0)):
-        return
+    if not raw:
+        return False
+    collapsed = COLLAPSED.match(raw) is not None and just_typed
+    if not (raw.startswith(ident.group(0)) or collapsed):
+        return False
     busy = any("tab to queue message" in line for line in tail[-6:])
     args = ["terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"]]
     run_orca(*args, *(["--text", "\t"] if busy else ["--enter"]))
+    return True
+
+
+def _still_ours(target: dict, text: str) -> bool:
+    ident = MESSAGE_ID.match(text)
+    for line in reversed(_screen_tail(target)):
+        stripped = line.strip()
+        if stripped.startswith(PROMPT_GLYPHS):
+            return bool(ident) and stripped[1:].strip().startswith(ident.group(0))
+    return False
 
 
 def input_clear_twice(target: dict) -> bool:
@@ -384,7 +405,7 @@ _RUN_CACHE: dict[str, tuple[float, dict]] = {}
 EDGE_FILE = Path.home() / ".cache" / "cb-board" / "edges.json"
 INCOMING = re.compile(r"Message from @([a-z0-9-]+)")
 OUTGOING = re.compile(r"→ sent to ([a-z0-9-]+)")
-CROSS = re.compile(r"\[(?:cb from ([a-z0-9-]+/[a-z0-9-]+)|From ([a-z0-9-]+))")
+CROSS = re.compile(r"\[(?:cb(?:#[0-9a-f]{6})? from ([a-z0-9-]+/[a-z0-9-]+)|From ([a-z0-9-]+))")
 
 
 def run_summary(path: Path) -> dict:
