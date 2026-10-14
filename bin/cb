@@ -32,6 +32,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -92,13 +93,24 @@ def sync(direction: str) -> None:
     git = ["git", "-C", str(REG)]
     if subprocess.run([*git, "rev-parse", "--is-inside-work-tree"], capture_output=True).returncode != 0:
         return
-    run = lambda *a: subprocess.run([*git, *a], capture_output=True, timeout=60)  # noqa: E731
+    run = lambda *a: subprocess.run([*git, *a], capture_output=True, text=True, timeout=60)  # noqa: E731
     if direction == "push":
-        run("add", "-A", str(REG))
-        run("commit", "-q", "-m", f"cb: {MACHINE} registry")
+        run("add", "-A", "--", str(REG))
+        # The pathspec commits the registry alone, never whatever else is staged in that checkout.
+        run("commit", "-q", "-m", f"cb: {MACHINE} registry", "--", str(REG))
     run("pull", "--rebase", "--autostash", "-q")
     if direction == "push":
-        run("push", "-q", "--no-verify")  # a registry edit must not trigger the pre-push code review
+        # --no-verify skips the pre-push code review, so only push when every pending
+        # commit is a registry edit; anything else waits for a reviewed push.
+        top = run("rev-parse", "--show-toplevel").stdout.strip()
+        reg = os.path.relpath(REG.resolve(), Path(top).resolve()) if top else "."
+        # git runs inside the registry dir, so anchor both pathspecs at the repo root.
+        other = run("log", "--format=%h", "@{upstream}..HEAD", "--", ":/", f":(top,exclude){reg}")
+        if other.returncode != 0 or other.stdout.strip():
+            print("cb: registry saved locally; not pushed, because this checkout has unpushed commits outside "
+                  "the registry (or no upstream). Push them through the normal review first.", file=sys.stderr)
+            return
+        run("push", "-q", "--no-verify")
     else:
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.touch()
@@ -216,6 +228,7 @@ PROMPT_GLYPHS = ("\u276f", "\u203a")  # Claude Code and Codex input lines
 PLACEHOLDERS = ("Ask Codex to do anything", 'Try "')
 MENU_OPTION = re.compile(r"\d+\. ")
 MENU_OPEN = "<question menu open>"
+UNREADABLE = "<screen unreadable>"
 # Footers of Claude Code question menus and permission prompts (both answer on Enter).
 MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
 DRAFT_WAIT_SECONDS = 15 * 60
@@ -227,14 +240,16 @@ def input_draft(target: dict) -> str | None:
     """Unsent text a person is typing in the target's input line, or None.
 
     The input line is the last screen line that starts with a prompt glyph. A leftover
-    `[cb from ...]` message is not a person's draft. An unreadable screen counts as clear,
-    so a read failure never blocks delivery.
+    `[cb from ...]` message is not a person's draft. An unreadable screen counts as busy:
+    pressing Enter blind could answer a permission menu nobody has seen.
     """
     out = run_orca("terminal", "read", *env_args(target["machine"]), "--terminal", target["terminal"], "--json")
     try:
         tail = json.loads(out)["result"]["terminal"].get("tail") or []
-    except (ValueError, KeyError, TypeError):
-        return None
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return UNREADABLE
+    if not tail:
+        return UNREADABLE
     for index in range(len(tail) - 1, -1, -1):
         stripped = tail[index].strip()
         if stripped.startswith(PROMPT_GLYPHS):
@@ -295,12 +310,13 @@ def _wait_then_deliver(target: dict, text: str, label: str) -> None:
         if input_draft(target) is None:
             _log_deferred(f"sent     {label} {deliver(target, text)}")
             return
-    if input_draft(target) == MENU_OPEN:
-        # Never answer someone's question menu with an injected Enter.
-        _log_deferred(f"undelivered {label}: a question menu stayed open for 15 min; message: {text[:300]}")
+    state = input_draft(target)
+    if state is None:
+        _log_deferred(f"sent     {label} {deliver(target, text)}")
         return
-    delayed = text.replace("] ", "] [delayed: the input line stayed busy for 15 min] ", 1)
-    _log_deferred(f"timeout  {label} {deliver(target, delayed)}")
+    # Never press Enter over a menu, an unread screen, or someone's unfinished draft.
+    _log_deferred(f"undelivered {label}: the input line stayed busy for {DRAFT_WAIT_SECONDS // 60} min "
+                  f"({state[:80]}); message: {text[:300]}")
 
 
 # ---------------------------------------------------------------- board
@@ -466,11 +482,25 @@ def poll_loop(interval: int) -> None:
 PAGE = Path(__file__).resolve().parent.parent / "board" / "cb-board.html"
 
 
+TOKEN: str | None = None  # set by --lan: the board shows every session's screen, so off-box readers need it
+
+
 class Handler(BaseHTTPRequestHandler):
+    def _authorized(self) -> bool:
+        if TOKEN is None:
+            return True
+        query = self.path.partition("?")[2]
+        cookie = self.headers.get("Cookie") or ""
+        return f"token={TOKEN}" in query.split("&") or f"cbtoken={TOKEN}" in cookie.replace(" ", "").split(";")
+
     def do_GET(self) -> None:
-        if self.path.startswith("/state.json"):
+        if not self._authorized():
+            self.send_error(403, "cb board: open the URL with the ?token= printed at startup")
+            return
+        route = self.path.partition("?")[0]
+        if route == "/state.json":
             body, ctype = json.dumps(STATE).encode(), "application/json"
-        elif self.path in ("/", "/index.html"):
+        elif route in ("/", "/index.html"):
             body, ctype = PAGE.read_bytes(), "text/html; charset=utf-8"
         else:
             self.send_error(404)
@@ -478,6 +508,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-store")
+        if TOKEN is not None:  # the page's own state.json fetches carry the token as a cookie
+            self.send_header("Set-Cookie", f"cbtoken={TOKEN}; HttpOnly; SameSite=Strict; Path=/")
         self.end_headers()
         self.wfile.write(body)
 
@@ -486,9 +518,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def cmd_board(a: argparse.Namespace) -> None:
+    global TOKEN
+    host, url = "127.0.0.1", f"http://localhost:{a.port}/"
+    if a.lan:  # e.g. WSL -> the Windows browser, or another machine: token-gated
+        TOKEN = secrets.token_urlsafe(16)
+        host, url = "0.0.0.0", f"http://localhost:{a.port}/?token={TOKEN}"
     threading.Thread(target=poll_loop, args=(a.interval,), daemon=True).start()
-    print(f"cb board on http://localhost:{a.port}/ (polling every {a.interval}s)")
-    ThreadingHTTPServer(("0.0.0.0", a.port), Handler).serve_forever()
+    print(f"cb board on {url} (polling every {a.interval}s)")
+    ThreadingHTTPServer((host, a.port), Handler).serve_forever()
 
 
 def main() -> None:
@@ -502,7 +539,9 @@ def main() -> None:
     s.add_argument("--wait-clear", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(fn=cmd_send)
     b = sub.add_parser("board"); b.add_argument("--port", type=int, default=8765)
-    b.add_argument("--interval", type=int, default=30); b.set_defaults(fn=cmd_board)
+    b.add_argument("--interval", type=int, default=30)
+    b.add_argument("--lan", action="store_true", help="listen on all interfaces, gated by a printed token")
+    b.set_defaults(fn=cmd_board)
     a = p.parse_args()
     a.fn(a)
 
