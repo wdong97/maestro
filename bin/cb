@@ -247,6 +247,7 @@ COLLAPSED = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
 PROMPT_WINDOW = 12  # the live input line sits at the bottom; older prompts higher up are history
 STUCK = "our earlier message is in the box, not yet submitted"
 CLOSED = "terminal closed; waiting for the session to re-register"
+RESENT = "[resent: skip it if you already acted on this cb#id] "
 QUEUE_DIR = Path.home() / ".cache" / "cb-board" / "queue"
 DELIVERY_LOG = Path.home() / ".cache" / "cb-board" / "deferred.log"
 POLL_SECONDS = 3
@@ -339,25 +340,28 @@ def _press_enter(target: dict) -> None:
 
 def deliver(target: dict, text: str, ident: str) -> str:
     """Type and submit in one Orca call; "delivered" only once the box is seen without it,
-    "typed" when it may still be in the box or the receipt was lost, "not accepted" only when
-    Orca explicitly refused and the box is seen without it."""
+    "typed" when it reached the terminal but is not yet seen submitted, "unknown" when the receipt
+    was lost and it was never seen, "not accepted" when Orca refused and the box is without it."""
     out = run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"],
                    "--text", text, "--enter", "--json")
     try:
         reply = json.loads(out)
         rejected = reply.get("ok") is False or not reply["result"]["send"]["accepted"]
+        reached = not rejected
     except (ValueError, KeyError, TypeError, AttributeError):
-        rejected = False  # no readable receipt: it may have gone through, so never send it again
+        rejected = reached = False  # no readable receipt: unknown whether it went through
     if rejected and _on_line(target, ident) is not True:
         return "not accepted"  # Orca said no; only our id on screen would overrule it
     for _ in range(SUBMIT_TRIES):
         time.sleep(SUBMIT_CHECK_SECONDS)
         seen = _on_line(target, ident)
         if seen is False:
-            return "delivered"
-        if seen and input_state(target, own=ident) == STUCK:
-            _press_enter(target)
-    return "typed"
+            return "delivered" if reached else "unknown"
+        if seen:
+            reached = True
+            if input_state(target, own=ident) == STUCK:
+                _press_enter(target)
+    return "typed" if reached else "unknown"
 
 
 class _Lock:
@@ -402,7 +406,7 @@ def _queue_rows(path: Path) -> list[dict]:
 
 
 def _queue_edit(path: Path, *, add: dict | None = None, drop: set[str] | None = None,
-                mark: set[str] | None = None, typed: str | None = None, retarget: dict | None = None) -> list[dict]:
+                mark: set[str] | None = None, **fields: object) -> list[dict]:
     with _Lock(path.with_suffix(".lock")):
         rows = _queue_rows(path)
         if add is not None:
@@ -411,9 +415,9 @@ def _queue_edit(path: Path, *, add: dict | None = None, drop: set[str] | None = 
             rows = [r for r in rows if r.get("id") not in drop]
         for r in rows:
             if mark and r.get("id") in mark:
-                r["typed"] = typed
-                if retarget:
-                    r["target"] = retarget
+                r.update({k: v for k, v in fields.items() if k != "resend"})
+                if fields.get("resend") and RESENT not in r["text"]:
+                    r["text"] = r["text"].replace("] ", "] " + RESENT, 1)
         if add is not None or drop or mark:
             tmp = path.with_suffix(".tmp")
             with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as fh:
@@ -451,19 +455,32 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                 batch = [r for r in rows if not r.get("typed")]
                 typed = [r for r in rows if r.get("typed")]
                 if typed and typed[0]["target"] != target and input_state(typed[0]["target"]) == CLOSED:
-                    # Typed into a terminal that has since closed: the new session never saw it.
-                    _queue_edit(path, mark={r["id"] for r in typed}, typed=None, retarget=target)
+                    # Typed into a terminal that has since closed. Resend to the new one, tagged, so
+                    # a resumed session that did see it can skip the repeat by its cb#id.
+                    _queue_edit(path, mark={r["id"] for r in typed}, typed=None, reached=False, target=target, resend=True)
+                    _log_delivery(f"resend   {label} ({len(typed)} message(s)): earlier terminal closed")
                     continue
                 if typed:
                     # Typed earlier but not seen submitted: wait for the box to show it gone.
                     lead = typed[0]["typed"]
                     seen = _on_line(typed[0]["target"], lead)
+                    if seen is False and not typed[0].get("reached") and RESENT not in typed[0]["text"]:
+                        # Never seen reaching the terminal (a crash mid-send, or a lost receipt):
+                        # send again rather than lose it; the [resent] tag marks a possible repeat.
+                        _queue_edit(path, mark={r["id"] for r in typed}, typed=None, resend=True)
+                        _log_delivery(f"resend   {label} ({len(typed)} message(s)): earlier attempt unconfirmed")
+                        continue
                     if seen is False:
                         _queue_edit(path, drop={r["id"] for r in typed})
-                        _log_delivery(f"sent     {label} ({len(typed)} message(s)): submitted after a wait")
+                        _log_delivery(f"sent     {label} ({len(typed)} message(s)): "
+                                      f"{'submitted after a wait' if typed[0].get('reached') else 'unconfirmed after one resend'}")
                         results.append(f"{len(typed)} message(s) to {label}: delivered")
                         continue
                     reason = "cannot tell yet whether our message was submitted"
+                    if seen is None:
+                        sync("pull")  # the terminal may have closed and re-registered elsewhere
+                        if input_state(typed[0]["target"]) == CLOSED:
+                            reason = CLOSED
                     if seen:
                         reason = input_state(typed[0]["target"], own=lead) or STUCK
                     if reason == STUCK and presses < SUBMIT_TRIES:
@@ -478,15 +495,16 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                         reason = input_state(target)
                     if reason is None:
                         text = " ".join(r["text"] for r in batch)
-                        # Record the attempt first: after a crash mid-send it is never sent twice.
-                        _queue_edit(path, mark={r["id"] for r in batch}, typed=batch[0]["id"], retarget=target)
+                        # Record the attempt first, so a crash mid-send is found and resent, never lost.
+                        _queue_edit(path, mark={r["id"] for r in batch}, typed=batch[0]["id"], reached=False, target=target)
                         result = deliver(target, text, batch[0]["id"])
                         if result == "delivered":
                             _queue_edit(path, drop={r["id"] for r in batch})
                             _log_delivery(f"sent     {label} ({len(batch)} message(s)): delivered")
                             results.append(f"{len(batch)} message(s) to {label}: delivered")
                             continue
-                        if result == "typed":
+                        if result in ("typed", "unknown"):
+                            _queue_edit(path, mark={r["id"] for r in batch}, reached=result == "typed")
                             presses = SUBMIT_TRIES  # deliver() already pressed Enter that many times
                             continue
                         _queue_edit(path, mark={r["id"] for r in batch}, typed=None)

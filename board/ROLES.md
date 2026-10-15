@@ -5,6 +5,8 @@ the role when it registers the session (`cb register <machine>/<role>-<name> --s
 Read `AGENTS.md` or `CLAUDE.md` first; this file says only what each role may and may not do.
 Shared rule for all roles: evidence, not narration. A running process, a green-looking
 dashboard, or a generated file is not proof. Exact commands and their output are.
+`cb send` would rather repeat a message than lose one: if a `[cb#id]` you already acted on
+arrives again (tagged `[resent: ...]`), skip it.
 
 ## Orchestrator (one per machine)
 
