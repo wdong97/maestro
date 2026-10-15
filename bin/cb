@@ -307,6 +307,12 @@ def input_state(target: dict, own: str | None = None) -> str | None:
     if MENU_OPTION.match(line) and any(f in " ".join(tail[index + 1:]) for f in MENU_FOOTERS):
         return "a question menu is open"
     line = "" if PLACEHOLDER.fullmatch(line) else line
+    if tail[index].strip().startswith(PROMPT_GLYPHS[0]):
+        # Claude's box runs from the prompt to its bottom border; text on any line of it is a draft.
+        for more in tail[index + 1:]:
+            if more.strip().startswith("\u2500"):
+                break
+            line = (line + " " + more.strip()).strip()
     boxes = [box for box in (draft, line) if box]
     if any(not (own and box.startswith(f"[cb#{own}")) for box in boxes):
         return "someone is typing"  # checked on both surfaces before anything counts as ours
@@ -338,12 +344,13 @@ def _press_enter(target: dict) -> None:
     run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"], "--enter")
 
 
-def deliver(target: dict, text: str, ident: str) -> str:
+def deliver(target: dict, text: str, ident: str, on_dispatched=lambda: None) -> str:
     """Type and submit in one Orca call; "delivered" only once the box is seen without it,
     "typed" when it reached the terminal but is not yet seen submitted, "unknown" when the receipt
     was lost and it was never seen, "not accepted" when Orca refused and the box is without it."""
     out = run_orca("terminal", "send", *env_args(target["machine"]), "--terminal", target["terminal"],
                    "--text", text, "--enter", "--json")
+    on_dispatched()
     try:
         reply = json.loads(out)
         rejected = reply.get("ok") is False or not reply["result"]["send"]["accepted"]
@@ -383,6 +390,10 @@ class _Lock:
         if self.fh:
             fcntl.flock(self.fh, fcntl.LOCK_UN)
             self.fh.close()
+
+
+def _terminal_lock(target: dict) -> Path:
+    return QUEUE_DIR / "terminals" / (re.sub(r"[^A-Za-z0-9_.-]", "_", f"{target['machine']}-{target['terminal']}") + ".lock")
 
 
 def _queue_file(label: str) -> Path:
@@ -451,6 +462,7 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                 rows = _queue_edit(path)
                 if not rows:
                     break
+                sync("pull")  # throttled; lets a re-registration on the other machine redirect the queue
                 target = _current_target(label, rows[-1]["target"])
                 batch = [r for r in rows if not r.get("typed")]
                 typed = [r for r in rows if r.get("typed")]
@@ -464,7 +476,8 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                     # Typed earlier but not seen submitted: wait for the box to show it gone.
                     lead = typed[0]["typed"]
                     seen = _on_line(typed[0]["target"], lead)
-                    if seen is False and not typed[0].get("reached") and RESENT not in typed[0]["text"]:
+                    if seen is False and not typed[0].get("reached") and not (
+                            typed[0].get("dispatched") and RESENT in typed[0]["text"]):
                         # Never seen reaching the terminal (a crash mid-send, or a lost receipt):
                         # send again rather than lose it; the [resent] tag marks a possible repeat.
                         _queue_edit(path, mark={r["id"] for r in typed}, typed=None, resend=True)
@@ -484,31 +497,35 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                     if seen:
                         reason = input_state(typed[0]["target"], own=lead) or STUCK
                     if reason == STUCK and presses < SUBMIT_TRIES:
-                        _press_enter(typed[0]["target"])
+                        with _Lock(_terminal_lock(typed[0]["target"])):
+                            _press_enter(typed[0]["target"])
                         presses += 1
                         time.sleep(SUBMIT_CHECK_SECONDS)
                         continue
                 else:
-                    reason = input_state(target)
-                    if reason is None:
-                        time.sleep(CLEAR_RECHECK_SECONDS)  # a second clear read narrows the race with a typist
+                    with _Lock(_terminal_lock(target)):  # one sender per terminal, whatever the label
                         reason = input_state(target)
-                    if reason is None:
-                        text = " ".join(r["text"] for r in batch)
-                        # Record the attempt first, so a crash mid-send is found and resent, never lost.
-                        _queue_edit(path, mark={r["id"] for r in batch}, typed=batch[0]["id"], reached=False, target=target)
-                        result = deliver(target, text, batch[0]["id"])
-                        if result == "delivered":
-                            _queue_edit(path, drop={r["id"] for r in batch})
-                            _log_delivery(f"sent     {label} ({len(batch)} message(s)): delivered")
-                            results.append(f"{len(batch)} message(s) to {label}: delivered")
-                            continue
-                        if result in ("typed", "unknown"):
-                            _queue_edit(path, mark={r["id"] for r in batch}, reached=result == "typed")
-                            presses = SUBMIT_TRIES  # deliver() already pressed Enter that many times
-                            continue
-                        _queue_edit(path, mark={r["id"] for r in batch}, typed=None)
-                        reason = "orca did not accept the send"
+                        if reason is None:
+                            time.sleep(CLEAR_RECHECK_SECONDS)  # a second clear read narrows the race with a typist
+                            reason = input_state(target)
+                        if reason is None:
+                            text = " ".join(r["text"] for r in batch)
+                            # Record the attempt first, so a crash mid-send is found and resent, never lost.
+                            ids = {r["id"] for r in batch}
+                            _queue_edit(path, mark=ids, typed=batch[0]["id"], reached=False, dispatched=False, target=target)
+                            result = deliver(target, text, batch[0]["id"],
+                                             on_dispatched=lambda: _queue_edit(path, mark=ids, dispatched=True))
+                            if result == "delivered":
+                                _queue_edit(path, drop={r["id"] for r in batch})
+                                _log_delivery(f"sent     {label} ({len(batch)} message(s)): delivered")
+                                results.append(f"{len(batch)} message(s) to {label}: delivered")
+                                continue
+                            if result in ("typed", "unknown"):
+                                _queue_edit(path, mark={r["id"] for r in batch}, reached=result == "typed")
+                                presses = SUBMIT_TRIES  # deliver() already pressed Enter that many times
+                                continue
+                            _queue_edit(path, mark={r["id"] for r in batch}, typed=None)
+                            reason = "orca did not accept the send"
                     if reason == CLOSED:
                         sync("pull")  # pick up a re-registration from the other machine
                 if reason != last_reason:
