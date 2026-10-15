@@ -236,7 +236,8 @@ def cmd_who(a: argparse.Namespace) -> None:
 
 PROMPT_GLYPHS = ("\u276f", "\u203a")  # Claude Code and Codex input lines
 CODEX_GLYPH = "\u203a"
-PLACEHOLDERS = ("Ask Codex to do anything", 'Try "')
+# Empty-box hints, matched against the whole line so a real draft like `Try "pytest" first` still counts.
+PLACEHOLDER = re.compile(r'Ask Codex to do anything|Try "[^"]*"')
 MENU_OPTION = re.compile(r"\d+\. ")
 # Footers of Claude Code question menus and permission prompts (both answer on Enter).
 MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
@@ -245,6 +246,7 @@ MENU_FOOTERS = ("Enter to select", "Esc to cancel", "to navigate")
 COLLAPSED = re.compile(r"\[Pasted (?:[Cc]ontent|text) ")
 PROMPT_WINDOW = 12  # the live input line sits at the bottom; older prompts higher up are history
 STUCK = "our earlier message is in the box, not yet submitted"
+CLOSED = "terminal closed; waiting for the session to re-register"
 QUEUE_DIR = Path.home() / ".cache" / "cb-board" / "queue"
 DELIVERY_LOG = Path.home() / ".cache" / "cb-board" / "deferred.log"
 POLL_SECONDS = 3
@@ -264,10 +266,14 @@ def _read_input(target: dict) -> tuple[list[str] | None, str]:
         return None, ""
 
 
-def _agent_running(target: dict) -> bool | None:
+def _agent_running(target: dict) -> bool | str | None:
+    """True/False for an agent in the terminal, CLOSED for a closed terminal, None if unknown."""
     out = run_orca("terminal", "show", *env_args(target["machine"]), "--terminal", target["terminal"], "--json")
     try:
-        result = json.loads(out)["result"]
+        reply = json.loads(out)
+        if (reply.get("error") or {}).get("code") == "terminal_handle_stale":
+            return CLOSED
+        result = reply["result"]
         return bool((result.get("terminal") or result).get("agentIdentity"))
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
@@ -286,8 +292,8 @@ def input_state(target: dict, own: str | None = None) -> str | None:
     the reason delivery waits. Anything in the box, on the terminal line or in Orca's compose
     box, waits for a person to send it, except our own message `own` (a cb#id), which is STUCK."""
     running = _agent_running(target)
-    if running is None:
-        return "screen unreadable"
+    if running is None or running == CLOSED:
+        return running or "screen unreadable"
     if not running:
         return "no agent running in that terminal"
     tail, draft = _read_input(target)
@@ -299,7 +305,7 @@ def input_state(target: dict, own: str | None = None) -> str | None:
     index, line = found
     if MENU_OPTION.match(line) and any(f in " ".join(tail[index + 1:]) for f in MENU_FOOTERS):
         return "a question menu is open"
-    line = "" if line.startswith(PLACEHOLDERS) else line
+    line = "" if PLACEHOLDER.fullmatch(line) else line
     boxes = [box for box in (draft, line) if box]
     if any(not (own and box.startswith(f"[cb#{own}")) for box in boxes):
         return "someone is typing"  # checked on both surfaces before anything counts as ours
@@ -342,8 +348,8 @@ def deliver(target: dict, text: str, ident: str) -> str:
         rejected = reply.get("ok") is False or not reply["result"]["send"]["accepted"]
     except (ValueError, KeyError, TypeError, AttributeError):
         rejected = False  # no readable receipt: it may have gone through, so never send it again
-    if rejected and _on_line(target, ident) is False:
-        return "not accepted"
+    if rejected and _on_line(target, ident) is not True:
+        return "not accepted"  # Orca said no; only our id on screen would overrule it
     for _ in range(SUBMIT_TRIES):
         time.sleep(SUBMIT_CHECK_SECONDS)
         seen = _on_line(target, ident)
@@ -396,7 +402,7 @@ def _queue_rows(path: Path) -> list[dict]:
 
 
 def _queue_edit(path: Path, *, add: dict | None = None, drop: set[str] | None = None,
-                mark: set[str] | None = None, typed: str | None = None) -> list[dict]:
+                mark: set[str] | None = None, typed: str | None = None, retarget: dict | None = None) -> list[dict]:
     with _Lock(path.with_suffix(".lock")):
         rows = _queue_rows(path)
         if add is not None:
@@ -406,6 +412,8 @@ def _queue_edit(path: Path, *, add: dict | None = None, drop: set[str] | None = 
         for r in rows:
             if mark and r.get("id") in mark:
                 r["typed"] = typed
+                if retarget:
+                    r["target"] = retarget
         if add is not None or drop or mark:
             tmp = path.with_suffix(".tmp")
             with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as fh:
@@ -439,13 +447,13 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                 rows = _queue_edit(path)
                 if not rows:
                     break
-                target = rows[0]["target"]
-                batch = []
-                for row in rows:
-                    if row["target"] != target:
-                        break
-                    batch.append(row)
+                target = _current_target(label, rows[-1]["target"])
+                batch = [r for r in rows if not r.get("typed")]
                 typed = [r for r in rows if r.get("typed")]
+                if typed and typed[0]["target"] != target and input_state(typed[0]["target"]) == CLOSED:
+                    # Typed into a terminal that has since closed: the new session never saw it.
+                    _queue_edit(path, mark={r["id"] for r in typed}, typed=None, retarget=target)
+                    continue
                 if typed:
                     # Typed earlier but not seen submitted: wait for the box to show it gone.
                     lead = typed[0]["typed"]
@@ -470,6 +478,8 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                         reason = input_state(target)
                     if reason is None:
                         text = " ".join(r["text"] for r in batch)
+                        # Record the attempt first: after a crash mid-send it is never sent twice.
+                        _queue_edit(path, mark={r["id"] for r in batch}, typed=batch[0]["id"], retarget=target)
                         result = deliver(target, text, batch[0]["id"])
                         if result == "delivered":
                             _queue_edit(path, drop={r["id"] for r in batch})
@@ -477,10 +487,12 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
                             results.append(f"{len(batch)} message(s) to {label}: delivered")
                             continue
                         if result == "typed":
-                            _queue_edit(path, mark={r["id"] for r in batch}, typed=batch[0]["id"])
                             presses = SUBMIT_TRIES  # deliver() already pressed Enter that many times
                             continue
+                        _queue_edit(path, mark={r["id"] for r in batch}, typed=None)
                         reason = "orca did not accept the send"
+                    if reason == CLOSED:
+                        sync("pull")  # pick up a re-registration from the other machine
                 if reason != last_reason:
                     _log_delivery(f"waiting  {label} ({len(rows)} queued): {reason}")
                     last_reason = reason
@@ -490,6 +502,12 @@ def drain(label: str, *, once: bool = False) -> tuple[list[str], str | None]:
         # A message queued while this drainer was finishing found the lock held: look again.
         if not _queue_edit(path):
             return results, None
+
+
+def _current_target(label: str, fallback: dict) -> dict:
+    """Where `label` points in the registry now, so a re-registered session gets its messages."""
+    entry = next((e for e in roster() if e.get("label") == label and e.get("terminal")), None)
+    return {"machine": entry["machine"], "terminal": entry["terminal"]} if entry else fallback
 
 
 def _spawn_drainer(label: str) -> None:
