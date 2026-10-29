@@ -80,6 +80,9 @@ Then, in this order:
 
 No recommendations beyond the disposition column, and no next-work plan. Stop after the report.
 
+For the owner's brief with decisions and recommendations, and for keeping threads moving
+between briefs, use `orchestrate`, which builds on this skill's collection step.
+
 ## Setup on a new machine
 
 `cd ~/maestro && git pull && ./install.sh` links this skill into Claude and Codex. `cb`

@@ -27,7 +27,7 @@ you
 | Role briefs per project | `board init` writes `orchestration/ROLES.md` | built |
 | Shared board with gates and sign-off | `board claim / review / gate / signoff / done` | built |
 | Function sessions on one machine | `ensemble spawn / delegate / duel / relay / review` | built |
-| Status up the chain | `/metastatus`, `/recap`, `/standup`, `ensemble jobs / dash / web` | built |
+| Status up the chain | `/metastatus`, `/orchestrate`, `/recap`, `/standup`, `ensemble jobs / dash / web` | built |
 | Review before every push by the other model | global `pre-push` hook | built |
 | One orchestrator per machine | a session you register as `<machine>/orchestrator` | convention |
 | A top orchestrator across machines | | next |
