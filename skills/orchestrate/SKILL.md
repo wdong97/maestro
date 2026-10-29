@@ -79,6 +79,13 @@ the options. For each one:
 - **The choices**, each in plain words, with its cost or risk.
 - **My recommendation**, and why, in one sentence.
 
+**Push reviews.** Before a thread asks the owner to say "push", it publishes a private
+one-page HTML review and links it in the ask. The review covers: what was wrong and what
+changed; the scope; the behaviour before and after, with one or two real examples; the
+evidence (test counts, run ids and grades, review verdicts); the risks and what was not
+verified; and the exact ask. It contains no account values or secrets. Give the owner
+each link, with your one-line view.
+
 **What you need to do.** A numbered list in the order to do it. Each item names
 where to do it (this session or a named thread), and its size (one word, one minute,
 one message). Include required confirmations, such as a "push" that must be said in a
