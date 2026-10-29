@@ -94,7 +94,7 @@ done
 # Prune every root we have ever installed into, not just this run's: changing CODEX_HOME
 # must not leave the previous home full of dangling links.
 { printf '%s\n' "$CLAUDE/skills" "$CODEX/skills" "$CODEX_PLAIN/skills" "$AGENTS/skills"
-  [ -f "$STATE/skill-roots" ] && cat "$STATE/skill-roots"
+  [ ! -f "$STATE/skill-roots" ] || cat "$STATE/skill-roots"
 } | awk 'NF && !seen[$0]++' | while IFS= read -r root; do prune_root "$root"; done
 [ "$CODEX" = "$CODEX_PLAIN" ] || note "note  CODEX_HOME=$CODEX (linked there as well as ~/.codex)"
 # Record the roots we linked into. CODEX_HOME can differ between install and uninstall
@@ -102,7 +102,7 @@ done
 mkdir -p "$STATE"
 # Merge, never overwrite: reinstalling under a different CODEX_HOME must not make the
 # previous root unknown to uninstall.
-{ [ -f "$STATE/skill-roots" ] && cat "$STATE/skill-roots"
+{ [ ! -f "$STATE/skill-roots" ] || cat "$STATE/skill-roots"
   printf '%s\n' "$CLAUDE/skills" "$CODEX/skills" "$CODEX_PLAIN/skills" "$AGENTS/skills"
 } | awk 'NF && !seen[$0]++' >"$STATE/skill-roots.tmp" && mv "$STATE/skill-roots.tmp" "$STATE/skill-roots"
 note "state $STATE/skill-roots (roots to clean on uninstall)"

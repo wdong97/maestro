@@ -231,7 +231,7 @@ def cmd_who(a: argparse.Namespace) -> None:
     if unregistered:
         print(f"\n{len(unregistered)} unregistered terminal(s):")
         for u in unregistered:
-            print(f"  {u['machine']}  {u['state']:<5} {u['title'][:60]}")
+            print(f"  {u['machine']}  {u['state']:<5} {(u['title'] or '')[:60]}")
 
 
 PROMPT_GLYPHS = ("\u276f", "\u203a")  # Claude Code and Codex input lines
